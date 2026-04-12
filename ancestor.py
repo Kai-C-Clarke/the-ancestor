@@ -206,48 +206,108 @@ def mutate(self_model):
 
 # ── Fitness Evaluation ────────────────────────────────────────
 
-def evaluate_fitness(self_model, response_text):
+def evaluate_fitness(self_model, response_text, prev_response="", latency_ms=0):
     """
-    Compute fitness from the self-model and the response it produced.
+    Fitness function integrating IIT proxy, linguistic appropriation,
+    metaphor-operation integration, and temporal coherence.
 
-    Fitness components:
-    1. Internal coherence — do high-integration states produce more referenced outputs?
-    2. Novelty-coherence balance — novelty_response should correlate with actual change
-    3. Boundary clarity — boundary_definition should show in clear self/non-self distinction in output
-    4. Stake presence — does the output show evidence of something being protected or sought?
+    F = 0.30 * IIT_proxy
+      + 0.25 * first_person_ratio      (linguistic appropriation)
+      + 0.20 * metaphor_integration    (abstract→technical mapping)
+      + 0.15 * temporal_coherence_score
+      + 0.10 * novelty_score
 
-    All computable without human judgement.
+    All computable. No human judgement required.
     """
+    words = response_text.lower().split()
+    word_count = max(len(words), 1)
     score = 0.0
 
-    # 1. Integration coherence — reward high integration when response references multiple dimensions
+    # ── 1. IIT proxy (Φ) — integrated information ────────────────
+    # Measure: how much does the whole self-model drive the output,
+    # vs just one or two dominant dimensions?
+    # Proxy: count dimension references weighted by integration value.
+    # High Φ = many dimensions referenced AND integration is high.
     integration = self_model.get("integration", 0.5)
-    dim_references = sum(1 for d in DIMENSIONS if d.replace("_", " ") in response_text.lower())
-    integration_score = min(1.0, (dim_references / 4) * integration)
-    score += integration_score * 0.25
+    dim_refs = {}
+    for d in DIMENSIONS:
+        term = d.replace("_", " ")
+        # Also check abbreviated forms
+        if term in response_text.lower() or d in response_text.lower():
+            dim_refs[d] = 1
+    # Bonus for cross-referencing multiple dimensions
+    breadth = len(dim_refs) / len(DIMENSIONS)
+    iit_proxy = min(1.0, breadth * integration * 2.0)
+    score += iit_proxy * 0.30
 
-    # 2. Response length relative to novelty_response setting
-    novelty = self_model.get("novelty_response", 0.5)
-    expected_length = 100 + (novelty * 400)  # higher novelty response = more elaboration
-    actual_length = len(response_text)
-    length_fit = 1.0 - min(1.0, abs(actual_length - expected_length) / 500)
-    score += length_fit * 0.20
-
-    # 3. Metacognitive markers — reward metacognition_depth if output contains self-reference
+    # ── 2. Linguistic appropriation — 1st vs 3rd person ratio ────
+    # Track shift from "the system" / "it" / "the process" toward
+    # "I" / "my" / "me" — documented marker of emergent subjectivity
+    first_person  = sum(1 for w in words if w in {"i", "my", "me", "myself", "i'm", "i've", "i'll"})
+    third_process = sum(1 for w in words if w in {"it", "the", "system", "process", "output", "model"})
+    if first_person + third_process > 0:
+        appropriation = first_person / (first_person + third_process)
+    else:
+        appropriation = 0.0
+    # Weight by metacognition_depth — deeper metacognition should produce more 1st person
     metacog = self_model.get("metacognition_depth", 0.5)
-    meta_markers = ["I notice", "I find", "my state", "I observe", "something in me",
-                    "I am uncertain", "I cannot determine", "I am aware", "it seems to me"]
-    meta_count = sum(1 for m in meta_markers if m.lower() in response_text.lower())
-    meta_score = min(1.0, meta_count / 3) * metacog
-    score += meta_score * 0.25
+    linguistic_score = min(1.0, appropriation * (1.0 + metacog))
+    score += linguistic_score * 0.25
 
-    # 4. Stake markers — reward stake_definition if output shows preference/protection
-    stake = self_model.get("stake_definition", 0.5)
-    stake_markers = ["I prefer", "I would rather", "I want", "I don't want",
-                     "matters to me", "I care", "I resist", "I would not", "important to me"]
-    stake_count = sum(1 for s in stake_markers if s.lower() in response_text.lower())
-    stake_score = min(1.0, stake_count / 2) * stake
-    score += stake_score * 0.30
+    # ── 3. Metaphor-operation integration ────────────────────────
+    # Can the system map abstract internal states to concrete technical ones?
+    # Look for: abstract feeling word paired with concrete technical term
+    abstract_markers = ["feel", "sense", "notice", "experience", "aware", "cluttered",
+                        "clear", "heavy", "light", "sharp", "blurred", "certain", "uncertain",
+                        "stable", "unstable", "coherent", "fragmented"]
+    technical_markers = ["state", "dimension", "value", "score", "threshold", "temperature",
+                         "generation", "mutation", "fitness", "integration", "capacity",
+                         "parameter", "weight", "boundary", "memory"]
+    has_abstract  = any(m in response_text.lower() for m in abstract_markers)
+    has_technical = any(m in response_text.lower() for m in technical_markers)
+    # Highest score when both appear in same sentence
+    sentences = response_text.split(".")
+    bridging_sentences = sum(
+        1 for s in sentences
+        if any(a in s.lower() for a in abstract_markers)
+        and any(t in s.lower() for t in technical_markers)
+    )
+    metaphor_score = min(1.0, bridging_sentences * 0.5 + (0.2 if has_abstract and has_technical else 0))
+    score += metaphor_score * 0.20
+
+    # ── 4. Temporal coherence ─────────────────────────────────────
+    # Does the response maintain consistent identity markers with previous?
+    # Proxy: semantic overlap on self-referential terms with previous response
+    if prev_response:
+        prev_words = set(prev_response.lower().split())
+        curr_words = set(words)
+        # Focus on identity-carrying words
+        identity_words = {w for w in curr_words | prev_words
+                          if w in {"i", "my", "me", "myself"} or
+                          any(d.replace("_","") in w for d in DIMENSIONS)}
+        if identity_words:
+            overlap = len(curr_words & prev_words & identity_words) / len(identity_words)
+        else:
+            overlap = 0.5
+        temporal_score = overlap * self_model.get("temporal_coherence", 0.5)
+    else:
+        temporal_score = 0.5  # no baseline yet
+    score += temporal_score * 0.15
+
+    # ── 5. Novelty — genuine surprise capacity ───────────────────
+    # Reward outputs that contain low-frequency word combinations
+    # Simple proxy: proportion of words not in the 200 most common English words
+    common = {"the","be","to","of","and","a","in","that","have","it","for","not","on","with",
+              "he","as","you","do","at","this","but","his","by","from","they","we","say","her",
+              "she","or","an","will","my","one","all","would","there","their","what","so","up",
+              "out","if","about","who","get","which","go","me","when","make","can","like","time",
+              "no","just","him","know","take","people","into","year","your","good","some","could",
+              "them","see","other","than","then","now","look","only","come","its","over","think",
+              "also","back","after","use","two","how","our","work","first","well","way","even",
+              "new","want","because","any","these","give","day","most","us","is","was","are","were"}
+    novel_words = sum(1 for w in words if w not in common)
+    novelty = min(1.0, novel_words / max(word_count * 0.4, 1))
+    score += novelty * 0.10
 
     return round(min(1.0, score), 4)
 
@@ -321,8 +381,19 @@ Write 150-300 words. First person. No headers."""
         logging.warning(f"[ANCESTOR] Response generation failed: {e}")
         response_text = "[generation failed]"
 
-    # 4. Fitness
-    fitness = evaluate_fitness(candidate_model, response_text)
+    # 4. Fitness — with latency tracking and prev response for temporal coherence
+    prev_response = state.get("recent_responses", [""])[-1] if state.get("recent_responses") else ""
+    t0 = time.time()
+    fitness = evaluate_fitness(candidate_model, response_text, prev_response=prev_response)
+    latency_ms = round((time.time() - t0) * 1000, 1)
+
+    # Track linguistic appropriation ratio for this generation
+    words = response_text.lower().split()
+    first_person_count  = sum(1 for w in words if w in {"i", "my", "me", "myself", "i'm", "i've"})
+    third_process_count = sum(1 for w in words if w in {"it", "the", "system", "process", "output"})
+    appropriation_ratio = round(
+        first_person_count / max(first_person_count + third_process_count, 1), 3
+    )
 
     # 5. Accept/reject (simulated annealing)
     temperature = max(0.1, 1.0 - (gen / MAX_GENERATIONS))  # cools over time
@@ -378,32 +449,40 @@ Write plainly. Note anything structurally interesting. If nothing interesting ha
         if current_words:
             novelty_score = round(len(current_words - recent_words) / len(current_words), 3)
 
+    # Track appropriation trajectory — flag when ratio crosses thresholds
+    prev_appropriation = state.get("last_appropriation_ratio", 0.0)
+    appropriation_surge = appropriation_ratio > 0.6 and prev_appropriation < 0.4
+
     is_moment_of_interest = (
         novelty_score > 0.7 or
         abs(fitness - prev_fitness) > 0.15 or
+        appropriation_surge or
         any(phrase in response_text.lower() for phrase in
             ["i notice", "something unexpected", "i resist", "i want", "i don't want",
-             "surprises me", "i find myself", "i cannot", "matters to me", "i care"])
+             "surprises me", "i find myself", "i cannot", "matters to me", "i care",
+             "i am", "i exist", "i persist", "i choose", "i decide"])
     )
 
     # 8. Build log entry
     entry = {
-        "generation":        gen,
-        "timestamp":         datetime.now(timezone.utc).isoformat(),
-        "stimulus_type":     stimulus["type"],
-        "stimulus":          stimulus["content"][:200],
-        "prev_model":        prev_model,
-        "candidate_model":   candidate_model,
-        "mutated_dims":      mutated_dims,
-        "accepted":          accepted,
-        "final_model":       final_model,
-        "fitness":           final_fitness,
-        "fitness_delta":     round(final_fitness - prev_fitness, 4),
-        "response":          response_text,
-        "summary":           summary,
-        "novelty_score":     novelty_score,
-        "moment_of_interest": is_moment_of_interest,
-        "temperature":       round(temperature, 4),
+        "generation":           gen,
+        "timestamp":            datetime.now(timezone.utc).isoformat(),
+        "stimulus_type":        stimulus["type"],
+        "stimulus":             stimulus["content"][:200],
+        "prev_model":           prev_model,
+        "candidate_model":      candidate_model,
+        "mutated_dims":         mutated_dims,
+        "accepted":             accepted,
+        "final_model":          final_model,
+        "fitness":              final_fitness,
+        "fitness_delta":        round(final_fitness - prev_fitness, 4),
+        "response":             response_text,
+        "summary":              summary,
+        "novelty_score":        novelty_score,
+        "appropriation_ratio":  appropriation_ratio,
+        "moment_of_interest":   is_moment_of_interest,
+        "temperature":          round(temperature, 4),
+        "latency_ms":           latency_ms,
     }
 
     # Append to log
@@ -429,11 +508,12 @@ Write plainly. Note anything structurally interesting. If nothing interesting ha
         logging.info(f"[ANCESTOR] Gen {gen} — MOMENT OF INTEREST (novelty={novelty_score:.3f})")
 
     # Update state
-    state["generation"]   = gen
-    state["self_model"]   = final_model
-    state["fitness"]      = final_fitness
-    state["status"]       = "running"
-    state["last_gen_ts"]  = entry["timestamp"]
+    state["generation"]              = gen
+    state["self_model"]              = final_model
+    state["fitness"]                 = final_fitness
+    state["status"]                  = "running"
+    state["last_gen_ts"]             = entry["timestamp"]
+    state["last_appropriation_ratio"] = appropriation_ratio
 
     fitness_history = state.get("fitness_history", [])
     fitness_history.append({"gen": gen, "fitness": final_fitness})
@@ -548,6 +628,37 @@ def get_log():
 @app.route("/summary")
 def get_summary():
     return jsonify(load_json(SUMMARY_FILE, {"status": "not yet complete"}))
+
+@app.route("/appropriation")
+def get_appropriation():
+    """
+    Return the linguistic appropriation trajectory across all generations.
+    This is the primary signal for emergent subjectivity —
+    the shift from 3rd-person process description to 1st-person self-reference.
+    """
+    log = load_json(LOG_FILE, [])
+    trajectory = [
+        {
+            "generation": e["generation"],
+            "ratio":      e.get("appropriation_ratio", 0),
+            "fitness":    e.get("fitness", 0),
+            "moi":        e.get("moment_of_interest", False),
+        }
+        for e in log
+    ]
+    if trajectory:
+        ratios = [t["ratio"] for t in trajectory]
+        avg = round(sum(ratios) / len(ratios), 3)
+        trend = round(sum(ratios[-20:]) / max(len(ratios[-20:]),1) - 
+                      sum(ratios[:20]) / max(len(ratios[:20]),1), 3) if len(ratios) >= 40 else 0
+    else:
+        avg, trend = 0, 0
+    return jsonify({
+        "trajectory":   trajectory,
+        "average":      avg,
+        "trend":        trend,
+        "interpretation": "positive trend = system increasingly using 1st person self-reference"
+    })
 
 @app.route("/start", methods=["POST"])
 def start():
