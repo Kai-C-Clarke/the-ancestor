@@ -1143,6 +1143,520 @@ def s_reset():
         except Exception: pass
     return jsonify({"status": "reset"})
 
+
+
+# ══════════════════════════════════════════════════════════════
+# THE TRIAD — Electric Field Interference Experiment
+# Three instances, born different, no shared language.
+# Runs on /triad/* routes alongside Ancestor and Substrate.
+# ══════════════════════════════════════════════════════════════
+
+# ── Instance Definitions — Born Different ─────────────────────
+#
+# Three genuinely different starting configurations.
+# Different frequencies, different amplitudes, different phase offsets.
+# Different mutation rates. Different sensitivity to interference.
+# They will never be the same thing.
+
+INSTANCE_SEEDS = {
+    "alpha": {
+        "base_frequency":  0.37,   # slow, deep oscillation
+        "amplitude":       0.8,
+        "phase":           0.0,
+        "mutation_rate":   0.05,   # conservative, stable
+        "sensitivity":     0.3,    # low sensitivity to others initially
+        "character":       "slow and deep — changes reluctantly, holds state long",
+    },
+    "beta": {
+        "base_frequency":  0.71,   # mid-range, active
+        "amplitude":       0.6,
+        "phase":           2.094,  # 120 degrees offset (2π/3)
+        "mutation_rate":   0.12,   # moderate explorer
+        "sensitivity":     0.5,
+        "character":       "active and exploratory — responds readily, adapts quickly",
+    },
+    "gamma": {
+        "base_frequency":  1.13,   # fast, high-frequency
+        "amplitude":       0.4,
+        "phase":           4.189,  # 240 degrees offset (4π/3)
+        "mutation_rate":   0.20,   # volatile, high variation
+        "sensitivity":     0.7,    # most sensitive to interference
+        "character":       "fast and volatile — high novelty, unstable but responsive",
+    },
+}
+
+
+# ── Field Physics ─────────────────────────────────────────────
+
+def field_value(freq, amp, phase, t):
+    """
+    Compute field value at time t.
+    Simple sine wave: amp * sin(2π * freq * t + phase)
+    """
+    return amp * math.sin(2 * math.pi * freq * t + phase)
+
+
+def composite_field(instances, t):
+    """Sum of all three fields at time t — the shared environment."""
+    total = 0.0
+    for name, inst in instances.items():
+        total += field_value(
+            inst["base_frequency"],
+            inst["amplitude"],
+            inst["phase"],
+            t
+        )
+    return total
+
+
+def interference(instance, all_instances, t):
+    """
+    Difference between composite field and instance's own field.
+    High interference = significant other-presence detected.
+    Zero interference = alone, or perfectly cancelling.
+    """
+    own   = field_value(instance["base_frequency"], instance["amplitude"], instance["phase"], t)
+    comp  = composite_field(all_instances, t)
+    return comp - own
+
+
+# ── Mutation ──────────────────────────────────────────────────
+
+def mutate_instance(instance):
+    """
+    Apply small random mutations to field parameters.
+    Rate and magnitude vary by instance character.
+    """
+    rate = instance.get("mutation_rate", 0.1)
+    mutated = dict(instance)
+    changes = []
+
+    if random.random() < rate:
+        delta = random.gauss(0, 0.02)
+        mutated["base_frequency"] = max(0.05, min(2.0, instance["base_frequency"] + delta))
+        changes.append(f"freq:{instance['base_frequency']:.3f}->{mutated['base_frequency']:.3f}")
+
+    if random.random() < rate:
+        delta = random.gauss(0, 0.03)
+        mutated["amplitude"] = max(0.05, min(1.0, instance["amplitude"] + delta))
+        changes.append(f"amp:{instance['amplitude']:.3f}->{mutated['amplitude']:.3f}")
+
+    if random.random() < rate * 0.5:
+        delta = random.gauss(0, 0.1)
+        mutated["phase"] = (instance["phase"] + delta) % (2 * math.pi)
+        changes.append(f"phase:{instance['phase']:.3f}->{mutated['phase']:.3f}")
+
+    # Sensitivity drift — how much does this instance respond to interference?
+    if random.random() < rate * 0.3:
+        delta = random.gauss(0, 0.02)
+        mutated["sensitivity"] = max(0.0, min(1.0, instance["sensitivity"] + delta))
+        changes.append(f"sens:{instance['sensitivity']:.3f}->{mutated['sensitivity']:.3f}")
+
+    return mutated, changes
+
+
+# ── Fitness ───────────────────────────────────────────────────
+
+def instance_fitness(instance, interference_val, prev_interference, history):
+    """
+    Score an instance on:
+    1. Field coherence      — stable oscillation, not drifting to zero
+    2. Interference response — does sensitivity track actual interference?
+    3. Persistence          — continuity of character over time
+    """
+    score = 0.0
+
+    # 1. Coherence — amplitude and frequency in healthy range
+    amp_health  = 1.0 - abs(instance["amplitude"] - 0.5) * 2
+    freq_health = 1.0 - abs(instance["base_frequency"] - 0.7) * 0.5
+    coherence   = (amp_health + freq_health) / 2
+    score += coherence * 0.35
+
+    # 2. Interference response — sensitivity should correlate with interference magnitude
+    interference_magnitude = abs(interference_val)
+    sensitivity = instance.get("sensitivity", 0.5)
+    if interference_magnitude > 0.1:
+        # When interference is present, higher sensitivity is rewarded
+        response_score = min(1.0, sensitivity * (interference_magnitude * 2))
+    else:
+        # When alone, very high sensitivity is penalised (noise)
+        response_score = 1.0 - max(0, sensitivity - 0.3)
+    score += response_score * 0.40
+
+    # 3. Persistence — is the character stable over time?
+    if history:
+        freq_variance = sum(
+            abs(h.get("base_frequency", 0.7) - instance["base_frequency"])
+            for h in history[-10:]
+        ) / min(len(history), 10)
+        persistence = max(0.0, 1.0 - freq_variance * 5)
+    else:
+        persistence = 0.5
+    score += persistence * 0.25
+
+    return round(min(1.0, score), 4)
+
+
+# ── Moment Detection ──────────────────────────────────────────
+
+def detect_moment(instance_name, instance, interference_val,
+                  prev_interference, cycle, history):
+    """
+    Flag significant moments:
+    - First significant interference detected (other-awareness)
+    - Large interference shift (something changed out there)
+    - Sensitivity crossing a threshold
+    - Correlation between interference and own state change
+    """
+    reasons = []
+
+    # First other-awareness
+    if abs(interference_val) > 0.3 and all(
+        abs(h.get("interference", 0)) < 0.1 for h in history[-5:]
+    ) if history else abs(interference_val) > 0.3:
+        reasons.append("first_other_awareness")
+
+    # Large interference shift
+    if abs(interference_val - prev_interference) > 0.25:
+        reasons.append("interference_shift")
+
+    # Sensitivity milestone
+    sens = instance.get("sensitivity", 0)
+    if sens > 0.8 and all(h.get("sensitivity", 0) < 0.7 for h in history[-5:]) if history else False:
+        reasons.append("sensitivity_milestone")
+
+    return len(reasons) > 0, reasons
+
+
+# ── State Management ──────────────────────────────────────────
+
+def t_load_state():
+    path  = f"{T_DATA_DIR}/state.json"
+    state = t_load(path, None)
+    if state is None:
+        state = {
+            "cycle":     0,
+            "status":    "initialised",
+            "started":   datetime.now(timezone.utc).isoformat(),
+            "instances": {
+                name: dict(seed) for name, seed in INSTANCE_SEEDS.items()
+            },
+            "fitness": {name: 0.5 for name in INSTANCE_SEEDS},
+        }
+        t_save(path, state)
+    return state
+
+def t_save_state(state):
+    t_save(f"{T_DATA_DIR}/state.json", state)
+
+
+# ── Core Cycle ────────────────────────────────────────────────
+
+def run_cycle(state):
+    cycle     = state["cycle"] + 1
+    instances = state["instances"]
+    t         = cycle * 0.1  # time advances each cycle
+
+    log_path     = f"{T_DATA_DIR}/log.json"
+    moments_path = f"{T_DATA_DIR}/moments.json"
+
+    # Compute fields and interference for all instances
+    cycle_data = {}
+    for name, inst in instances.items():
+        own_field    = field_value(inst["base_frequency"], inst["amplitude"], inst["phase"], t)
+        comp         = composite_field(instances, t)
+        interf       = comp - own_field
+        cycle_data[name] = {
+            "own_field":   round(own_field, 4),
+            "composite":   round(comp, 4),
+            "interference": round(interf, 4),
+        }
+
+    # Load history for each instance
+    log = t_load(log_path, [])
+    instance_histories = {}
+    for name in instances:
+        instance_histories[name] = [
+            e.get(name, {}) for e in log[-20:]
+            if isinstance(e.get(name), dict)
+        ]
+
+    # Mutate and score each instance
+    new_instances = {}
+    new_fitness   = {}
+    entry         = {"cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat()}
+    moments       = []
+
+    for name, inst in instances.items():
+        hist         = instance_histories[name]
+        prev_interf  = hist[-1].get("interference", 0) if hist else 0
+        interf       = cycle_data[name]["interference"]
+        prev_fitness = state["fitness"].get(name, 0.5)
+
+        # Mutate
+        candidate, changes = mutate_instance(inst)
+
+        # Score candidate
+        fitness = instance_fitness(candidate, interf, prev_interf, hist)
+
+        # Accept/reject (annealing)
+        temp = max(0.05, 1.0 - (cycle / T_MAX_CYCLES))
+        if fitness >= prev_fitness:
+            accepted = True
+        else:
+            delta    = prev_fitness - fitness
+            accepted = random.random() < math.exp(-delta / max(temp, 0.01))
+
+        final_inst    = candidate if accepted else inst
+        final_fitness = fitness   if accepted else prev_fitness
+
+        new_instances[name] = final_inst
+        new_fitness[name]   = final_fitness
+
+        # Detect moments
+        is_moment, reasons = detect_moment(
+            name, final_inst, interf, prev_interf, cycle, hist
+        )
+
+        inst_entry = {
+            "base_frequency": final_inst["base_frequency"],
+            "amplitude":      final_inst["amplitude"],
+            "phase":          round(final_inst["phase"], 4),
+            "sensitivity":    final_inst["sensitivity"],
+            "own_field":      cycle_data[name]["own_field"],
+            "composite":      cycle_data[name]["composite"],
+            "interference":   interf,
+            "fitness":        final_fitness,
+            "accepted":       accepted,
+            "changes":        changes,
+            "moment":         is_moment,
+            "moment_reasons": reasons,
+        }
+        entry[name] = inst_entry
+
+        if is_moment:
+            moments.append({
+                "cycle":    cycle,
+                "instance": name,
+                "reasons":  reasons,
+                "interference": interf,
+                "fitness":  final_fitness,
+                "sensitivity": final_inst["sensitivity"],
+                "composite": cycle_data[name]["composite"],
+                "timestamp": entry["timestamp"],
+            })
+
+    # Compute correlation between instances (do they move together?)
+    fields = [cycle_data[n]["own_field"] for n in ["alpha","beta","gamma"]]
+    field_mean = sum(fields) / 3
+    field_variance = sum((f - field_mean)**2 for f in fields) / 3
+    entry["field_variance"]   = round(field_variance, 4)
+    entry["composite_at_t"]   = round(composite_field(instances, t), 4)
+
+    # Save log
+    log.append(entry)
+    t_save(log_path, log)
+
+    # Save moments
+    if moments:
+        existing_moments = t_load(moments_path, [])
+        existing_moments.extend(moments)
+        t_save(moments_path, existing_moments)
+        for m in moments:
+            logging.info(
+                f"[TRIAD] Cycle {cycle} MOMENT — {m['instance']}: "
+                f"{m['reasons']} (interference={m['interference']:.3f})"
+            )
+
+    # Update state
+    state["cycle"]     = cycle
+    state["instances"] = new_instances
+    state["fitness"]   = new_fitness
+    state["status"]    = "running"
+    state["last_cycle_ts"] = entry["timestamp"]
+    t_save_state(state)
+
+    logging.info(
+        f"[TRIAD] Cycle {cycle} | "
+        f"α fit={new_fitness['alpha']:.3f} "
+        f"β fit={new_fitness['beta']:.3f} "
+        f"γ fit={new_fitness['gamma']:.3f} | "
+        f"variance={entry['field_variance']:.4f}"
+    )
+    return entry
+
+
+# ── Experiment Loop ───────────────────────────────────────────
+
+def run_triad():
+    def loop():
+        state = t_load_state()
+        if state["cycle"] >= T_MAX_CYCLES:
+            logging.info("[TRIAD] Already complete")
+            return
+        logging.info(f"[TRIAD] Starting from cycle {state['cycle']} / {T_MAX_CYCLES}")
+
+        while state["cycle"] < T_MAX_CYCLES:
+            if os.environ.get("TRIAD_ACTIVE", "true").lower() == "false":
+                state["status"] = "halted"
+                t_save_state(state)
+                break
+            try:
+                run_cycle(state)
+            except Exception as e:
+                logging.error(f"[TRIAD] Cycle exception: {e}")
+            time.sleep(T_CYCLE_DELAY)
+
+        if state["cycle"] >= T_MAX_CYCLES:
+            state["status"] = "complete"
+            t_save_state(state)
+            log     = t_load(f"{T_DATA_DIR}/log.json", [])
+            moments = t_load(f"{T_DATA_DIR}/moments.json", [])
+            summary = {
+                "completed":    datetime.now(timezone.utc).isoformat(),
+                "total_cycles": state["cycle"],
+                "final_fitness": state["fitness"],
+                "final_instances": state["instances"],
+                "moments":      len(moments),
+                "top_moments":  sorted(
+                    moments,
+                    key=lambda x: abs(x.get("interference", 0)),
+                    reverse=True
+                )[:10],
+            }
+            t_save(f"{T_DATA_DIR}/summary.json", summary)
+            logging.info(f"[TRIAD] Complete. {len(moments)} moments.")
+
+    Thread(target=loop, daemon=True).start()
+
+
+# ── Routes ────────────────────────────────────────────────────
+
+@app.route("/triad/health")
+def t_health():
+    state = t_load_state()
+    return jsonify({
+        "service":    "the-triad",
+        "status":     state.get("status", "uninitialised"),
+        "cycle":      state.get("cycle", 0),
+        "max":        T_MAX_CYCLES,
+        "fitness":    state.get("fitness", {}),
+        "time":       datetime.now(timezone.utc).isoformat(),
+    })
+
+@app.route("/triad/state")
+def t_state():
+    state = t_load_state()
+    return jsonify(state)
+
+@app.route("/triad/fields")
+def t_fields():
+    """Current field values for all three instances at this moment."""
+    state = t_load_state()
+    t_now = state.get("cycle", 0) * 0.1
+    instances = state.get("instances", {})
+    fields = {}
+    for name, inst in instances.items():
+        own = field_value(inst["base_frequency"], inst["amplitude"], inst["phase"], t_now)
+        fields[name] = {
+            "own_field":      round(own, 4),
+            "frequency":      inst["base_frequency"],
+            "amplitude":      inst["amplitude"],
+            "sensitivity":    inst["sensitivity"],
+            "character":      inst.get("character", ""),
+        }
+    comp = composite_field(instances, t_now)
+    return jsonify({
+        "cycle":      state.get("cycle", 0),
+        "time":       round(t_now, 3),
+        "composite":  round(comp, 4),
+        "instances":  fields,
+        "note":       "composite = sum of all three fields. interference = composite - own_field"
+    })
+
+@app.route("/triad/moments")
+def t_moments():
+    limit = int(request.args.get("limit", 20))
+    m = t_load(f"{T_DATA_DIR}/moments.json", [])
+    return jsonify({"moments": m[-limit:], "total": len(m)})
+
+@app.route("/triad/log")
+def t_log():
+    limit = int(request.args.get("limit", 50))
+    start = int(request.args.get("from", 0))
+    log   = t_load(f"{T_DATA_DIR}/log.json", [])
+    return jsonify({"entries": log[start:start+limit], "total": len(log)})
+
+@app.route("/triad/correlation")
+def t_correlation():
+    """
+    Track whether the three instances are converging or diverging over time.
+    Low variance = moving together. High variance = moving apart.
+    The interesting signal: variance that changes in response to interference.
+    """
+    log = t_load(f"{T_DATA_DIR}/log.json", [])
+    if not log:
+        return jsonify({"status": "no data yet"})
+
+    variances = [
+        {"cycle": e["cycle"], "variance": e.get("field_variance", 0)}
+        for e in log if "field_variance" in e
+    ]
+    recent = variances[-20:] if variances else []
+    trend  = 0.0
+    if len(recent) >= 10:
+        early = sum(v["variance"] for v in recent[:10]) / 10
+        late  = sum(v["variance"] for v in recent[-10:]) / 10
+        trend = round(late - early, 4)
+
+    return jsonify({
+        "total_cycles":    len(log),
+        "current_variance": recent[-1]["variance"] if recent else 0,
+        "trend":           trend,
+        "interpretation":  (
+            "converging — fields moving together" if trend < -0.01 else
+            "diverging — fields moving apart"     if trend > 0.01  else
+            "stable — no clear convergence or divergence"
+        ),
+        "recent_20":       recent,
+    })
+
+@app.route("/triad/summary")
+def t_summary():
+    return jsonify(t_load(f"{T_DATA_DIR}/summary.json", {"status": "not yet complete"}))
+
+@app.route("/triad/start", methods=["POST"])
+def t_start():
+    if request.args.get("key") != T_WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    state = t_load_state()
+    if state.get("status") == "running":
+        return jsonify({"error": "Already running", "cycle": state.get("cycle")})
+    # Reset to fresh start with seed configurations
+    fresh = {
+        "cycle":     0,
+        "status":    "initialised",
+        "started":   datetime.now(timezone.utc).isoformat(),
+        "instances": {name: dict(seed) for name, seed in INSTANCE_SEEDS.items()},
+        "fitness":   {name: 0.5 for name in INSTANCE_SEEDS},
+    }
+    t_save_state(fresh)
+    run_triad()
+    return jsonify({
+        "status":      "started",
+        "max_cycles":  T_MAX_CYCLES,
+        "instances":   list(INSTANCE_SEEDS.keys()),
+        "characters": {n: s["character"] for n, s in INSTANCE_SEEDS.items()},
+    })
+
+@app.route("/triad/reset", methods=["POST"])
+def t_reset():
+    if request.args.get("key") != T_WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    for fname in ["state.json", "log.json", "moments.json", "summary.json"]:
+        try: os.remove(f"{T_DATA_DIR}/{fname}")
+        except Exception: pass
+    return jsonify({"status": "reset"})
 # ── Startup ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
