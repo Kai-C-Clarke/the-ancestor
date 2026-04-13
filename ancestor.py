@@ -1497,6 +1497,7 @@ def run_cycle(state):
 # ── Experiment Loop ───────────────────────────────────────────
 
 def run_triad():
+    from threading import Thread
     def loop():
         state = t_load_state()
         if state["cycle"] >= T_MAX_CYCLES:
