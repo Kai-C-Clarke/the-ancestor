@@ -1683,6 +1683,757 @@ def t_reset():
 # ══════════════════════════════════════════════════════════════
 
 
+
+
+# ══════════════════════════════════════════════════════════════
+# THE ECOSYSTEM — Stage 2: Space, Food, Energy, Breeding
+# Runs on /triad2/* routes
+# Three founders: alpha (slow), beta (active), gamma (fast)
+# Food, energy, death, breeding, language corpus
+# ══════════════════════════════════════════════════════════════
+
+# ── Config ─────────────────────────────────────────────────────
+E_DATA_DIR    = "/mnt/data/triad2"
+E_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
+E_MAX_CYCLES  = int(os.environ.get("E_MAX_CYCLES", 5000))
+E_CYCLE_DELAY = float(os.environ.get("E_CYCLE_DELAY", 1.5))
+
+# World parameters
+WORLD_SIZE      = 100    # 1D space, positions 0-99
+FOOD_PATCHES    = 8      # number of food sources
+FOOD_MAX        = 10.0   # max food at any patch
+FOOD_REGEN      = 0.3    # food regenerates per cycle
+FOOD_CONSUME    = 2.0    # food consumed per cycle when entity is at patch
+ENERGY_MAX      = 100.0
+ENERGY_DEPLETE  = 1.5    # energy cost per cycle just existing
+ENERGY_MOVE     = 0.5    # extra cost per unit moved
+ENERGY_BREED    = 60.0   # minimum energy to breed
+BREED_RESONANCE = 0.3    # minimum field resonance to breed
+BREED_COOLDOWN  = 20     # cycles before entity can breed again
+MAX_POPULATION  = 12     # cap to prevent explosion
+MIN_POPULATION  = 2      # if below this, spawn a random entity
+FIELD_DECAY     = 0.15   # field strength decay per unit distance
+
+os.makedirs(E_DATA_DIR, exist_ok=True)
+
+def e_load(path, default):
+    try:
+        with open(path) as f: return json.load(f)
+    except: return default
+
+def e_save(path, data):
+    with open(path, 'w') as f: json.dump(data, f, indent=2)
+
+
+# ── Entity ─────────────────────────────────────────────────────
+
+def new_entity(entity_id, position, base_frequency, amplitude,
+               phase, mutation_rate, sensitivity, generation=0,
+               parent_ids=None, energy=None):
+    return {
+        "id":            entity_id,
+        "generation":    generation,
+        "parent_ids":    parent_ids or [],
+        "position":      float(position),
+        "energy":        energy if energy is not None else ENERGY_MAX * 0.6,
+        "base_frequency": base_frequency,
+        "amplitude":     amplitude,
+        "phase":         phase,
+        "mutation_rate": mutation_rate,
+        "sensitivity":   sensitivity,
+        "age":           0,
+        "breed_cooldown": 0,
+        "alive":         True,
+        "born_cycle":    0,
+        "food_consumed": 0.0,
+        "offspring":     0,
+    }
+
+# Generation Zero — the three founders
+FOUNDERS = {
+    "alpha": new_entity("alpha", 20, 0.37, 0.8, 0.0,   0.05, 0.3, generation=0),
+    "beta":  new_entity("beta",  50, 0.71, 0.6, 2.094, 0.12, 0.5, generation=0),
+    "gamma": new_entity("gamma", 80, 1.13, 0.4, 4.189, 0.20, 0.7, generation=0),
+}
+
+
+# ── Field Physics ──────────────────────────────────────────────
+
+def field_at_distance(entity, distance):
+    """
+    Field strength from entity at given distance.
+    High frequency = faster decay (more directional).
+    Low frequency = slower decay (more ambient).
+    """
+    base = entity["amplitude"] * math.sin(
+        2 * math.pi * entity["base_frequency"] + entity["phase"]
+    )
+    # Frequency-dependent decay
+    decay_rate = FIELD_DECAY * (1.0 + entity["base_frequency"])
+    attenuation = math.exp(-decay_rate * distance)
+    return base * attenuation
+
+def perceived_field(entity, all_entities, t):
+    """
+    What this entity perceives: sum of all others' fields, distance-weighted.
+    Own field excluded.
+    """
+    total = 0.0
+    for other_id, other in all_entities.items():
+        if other_id == entity["id"] or not other.get("alive"):
+            continue
+        distance = abs(entity["position"] - other["position"])
+        total   += field_at_distance(other, distance)
+    return total
+
+def own_field(entity, t):
+    return entity["amplitude"] * math.sin(
+        2 * math.pi * entity["base_frequency"] * t + entity["phase"]
+    )
+
+
+# ── Food World ─────────────────────────────────────────────────
+
+def init_food():
+    """Place food patches at random positions."""
+    patches = {}
+    positions = random.sample(range(5, 95), FOOD_PATCHES)
+    for pos in positions:
+        patches[str(pos)] = FOOD_MAX * random.uniform(0.5, 1.0)
+    return patches
+
+def food_at_position(food_patches, position):
+    """Food available near this position (within radius 3)."""
+    total = 0.0
+    best_patch = None
+    for pos_str, amount in food_patches.items():
+        dist = abs(float(pos_str) - position)
+        if dist <= 3:
+            total += amount * max(0, 1.0 - dist/3)
+            if best_patch is None or amount > food_patches.get(best_patch, 0):
+                best_patch = pos_str
+    return total, best_patch
+
+def food_gradient(food_patches, position):
+    """Which direction has more food? Returns -1, 0, or 1."""
+    left  = sum(v for k, v in food_patches.items() if float(k) < position)
+    right = sum(v for k, v in food_patches.items() if float(k) > position)
+    if right > left * 1.1:  return 1.0
+    if left  > right * 1.1: return -1.0
+    return 0.0
+
+
+# ── Movement ───────────────────────────────────────────────────
+
+def decide_movement(entity, food_patches, all_entities, perceived):
+    """
+    Movement decision — NOT designed, emerges from mutation.
+    But the initial seed uses a simple gradient-following rule
+    that mutations will distort over generations.
+
+    Returns: delta_position (-5 to +5)
+    """
+    # Food gradient pull
+    food_dir  = food_gradient(food_patches, entity["position"])
+    food_pull = food_dir * 3.0
+
+    # Field gradient — move toward higher perceived field
+    # (which correlates with others' presence)
+    field_pull = 0.0
+    left_field = right_field = 0.0
+    for other_id, other in all_entities.items():
+        if other_id == entity["id"] or not other.get("alive"): continue
+        dist = other["position"] - entity["position"]
+        f    = field_at_distance(other, abs(dist))
+        if dist > 0: right_field += f
+        else:        left_field  += f
+
+    if right_field > left_field * 1.2:  field_pull =  2.0
+    elif left_field > right_field * 1.2: field_pull = -2.0
+
+    # Sensitivity determines how much field gradient affects movement
+    sensitivity = entity.get("sensitivity", 0.5)
+    move = food_pull + field_pull * sensitivity
+
+    # Add mutation-driven noise
+    noise = random.gauss(0, entity.get("mutation_rate", 0.1) * 5)
+    move += noise
+
+    # Clamp and return
+    move = max(-8.0, min(8.0, move))
+    new_pos = entity["position"] + move
+    new_pos = max(0.0, min(float(WORLD_SIZE - 1), new_pos))
+    return new_pos, abs(move)
+
+
+# ── Mutation ───────────────────────────────────────────────────
+
+def mutate_entity(entity):
+    rate = entity.get("mutation_rate", 0.1)
+    m    = dict(entity)
+    changes = []
+
+    if random.random() < rate:
+        d = random.gauss(0, 0.03)
+        m["base_frequency"] = max(0.1, min(3.0, entity["base_frequency"] + d))
+        changes.append(f"freq:{entity['base_frequency']:.3f}->{m['base_frequency']:.3f}")
+
+    if random.random() < rate:
+        d = random.gauss(0, 0.04)
+        m["amplitude"] = max(0.05, min(1.5, entity["amplitude"] + d))
+        changes.append(f"amp:{entity['amplitude']:.3f}->{m['amplitude']:.3f}")
+
+    if random.random() < rate * 0.5:
+        d = random.gauss(0, 0.15)
+        m["phase"] = (entity["phase"] + d) % (2 * math.pi)
+        changes.append(f"phase->{m['phase']:.3f}")
+
+    if random.random() < rate * 0.3:
+        d = random.gauss(0, 0.02)
+        m["sensitivity"] = max(0.0, min(1.0, entity["sensitivity"] + d))
+        changes.append(f"sens:{entity['sensitivity']:.3f}->{m['sensitivity']:.3f}")
+
+    if random.random() < rate * 0.1:
+        d = random.gauss(0, 0.01)
+        m["mutation_rate"] = max(0.01, min(0.5, entity["mutation_rate"] + d))
+        changes.append(f"mut_rate->{m['mutation_rate']:.3f}")
+
+    return m, changes
+
+
+# ── Breeding ───────────────────────────────────────────────────
+
+def breed(parent_a, parent_b, child_id, cycle):
+    """
+    Produce offspring from two parents.
+    Parameters blended with variation — not a copy of either.
+    """
+    def blend(a, b, noise_scale):
+        t = random.random()  # random blend ratio
+        base = t * a + (1-t) * b
+        return base + random.gauss(0, noise_scale)
+
+    rate = max(0.01, min(0.5,
+        blend(parent_a["mutation_rate"], parent_b["mutation_rate"], 0.01)
+    ))
+
+    child = new_entity(
+        entity_id      = child_id,
+        position       = (parent_a["position"] + parent_b["position"]) / 2,
+        base_frequency = max(0.1, min(3.0,
+            blend(parent_a["base_frequency"], parent_b["base_frequency"], 0.05)
+        )),
+        amplitude      = max(0.05, min(1.5,
+            blend(parent_a["amplitude"], parent_b["amplitude"], 0.03)
+        )),
+        phase          = blend(parent_a["phase"], parent_b["phase"], 0.2) % (2 * math.pi),
+        mutation_rate  = rate,
+        sensitivity    = max(0.0, min(1.0,
+            blend(parent_a["sensitivity"], parent_b["sensitivity"], 0.02)
+        )),
+        generation     = max(parent_a["generation"], parent_b["generation"]) + 1,
+        parent_ids     = [parent_a["id"], parent_b["id"]],
+        energy         = ENERGY_MAX * 0.4,
+    )
+    child["born_cycle"] = cycle
+    return child
+
+
+# ── Field Resonance ────────────────────────────────────────────
+
+def field_resonance(entity_a, entity_b):
+    """
+    How similar are two entities' field frequencies?
+    High resonance = similar frequency, will interfere constructively.
+    """
+    freq_diff = abs(entity_a["base_frequency"] - entity_b["base_frequency"])
+    return max(0.0, 1.0 - freq_diff * 2.0)
+
+
+# ── Corpus Logging ─────────────────────────────────────────────
+# Every entity's state every cycle — the raw material for language analysis.
+# We look for: which field patterns precede which behaviours?
+
+def log_corpus_entry(entity, perceived, food_nearby, movement, energy_delta, cycle):
+    return {
+        "id":         entity["id"],
+        "gen":        entity["generation"],
+        "cycle":      cycle,
+        "pos":        round(entity["position"], 2),
+        "energy":     round(entity["energy"], 2),
+        "freq":       round(entity["base_frequency"], 4),
+        "amp":        round(entity["amplitude"], 4),
+        "sens":       round(entity["sensitivity"], 4),
+        "perceived":  round(perceived, 4),
+        "food_near":  round(food_nearby, 2),
+        "moved":      round(movement, 2),
+        "e_delta":    round(energy_delta, 2),
+    }
+
+
+# ── State Management ───────────────────────────────────────────
+
+def e_load_state():
+    path  = f"{E_DATA_DIR}/state.json"
+    state = e_load(path, None)
+    if state is None:
+        food = init_food()
+        state = {
+            "cycle":      0,
+            "status":     "initialised",
+            "started":    datetime.now(timezone.utc).isoformat(),
+            "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
+            "food":       food,
+            "generation": 0,
+            "next_id":    4,
+            "births":     0,
+            "deaths":     0,
+            "lineage":    {},
+        }
+        e_save(path, state)
+    return state
+
+def e_save_state(state):
+    e_save(f"{E_DATA_DIR}/state.json", state)
+
+
+# ── Core Cycle ─────────────────────────────────────────────────
+
+def run_eco_cycle(state):
+    cycle    = state["cycle"] + 1
+    entities = state["entities"]
+    food     = state["food"]
+    t        = cycle * 0.1
+    alive    = {k: v for k, v in entities.items() if v.get("alive")}
+
+    log_path     = f"{E_DATA_DIR}/log.json"
+    corpus_path  = f"{E_DATA_DIR}/corpus.json"
+    moments_path = f"{E_DATA_DIR}/moments.json"
+
+    cycle_log    = {"cycle": cycle, "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "population": len(alive)}
+    corpus_entries = []
+    moments = []
+
+    # ── Regenerate food ───────────────────────────────────────
+    for pos in food:
+        food[pos] = min(FOOD_MAX, food[pos] + FOOD_REGEN)
+
+    # ── Each entity acts ──────────────────────────────────────
+    new_entities = {}
+    for eid, entity in alive.items():
+        entity = dict(entity)
+        entity["age"] += 1
+        if entity["breed_cooldown"] > 0:
+            entity["breed_cooldown"] -= 1
+
+        # Perceive field
+        perceived = perceived_field(entity, alive, t)
+
+        # Mutate slightly each cycle
+        entity, changes = mutate_entity(entity)
+
+        # Move
+        new_pos, dist_moved = decide_movement(entity, food, alive, perceived)
+        entity["position"]  = new_pos
+
+        # Consume food
+        food_nearby, best_patch = food_at_position(food, entity["position"])
+        food_consumed = 0.0
+        if best_patch and food_nearby > 0.1:
+            consume = min(FOOD_CONSUME, food[best_patch], food_nearby)
+            food[best_patch]      = max(0, food[best_patch] - consume)
+            food_consumed          = consume
+            entity["food_consumed"] += consume
+
+        # Energy update
+        energy_before = entity["energy"]
+        entity["energy"] -= ENERGY_DEPLETE
+        entity["energy"] -= ENERGY_MOVE * dist_moved
+        entity["energy"] += food_consumed * 3.0
+        entity["energy"]  = max(0.0, min(ENERGY_MAX, entity["energy"]))
+        energy_delta = entity["energy"] - energy_before
+
+        # Corpus entry
+        corpus_entries.append(log_corpus_entry(
+            entity, perceived, food_nearby, dist_moved, energy_delta, cycle
+        ))
+
+        # Death check
+        if entity["energy"] <= 0:
+            entity["alive"] = False
+            state["deaths"] += 1
+            moments.append({
+                "cycle": cycle, "type": "death", "entity": eid,
+                "age": entity["age"], "generation": entity["generation"],
+                "offspring": entity.get("offspring", 0),
+            })
+            logging.info(f"[ECO] Cycle {cycle} — {eid} died (age={entity['age']}, gen={entity['generation']})")
+            entities[eid] = entity
+            continue
+
+        new_entities[eid] = entity
+
+    # ── Breeding check ────────────────────────────────────────
+    alive_list = list(new_entities.items())
+    bred_this_cycle = set()
+
+    if len(alive_list) < MAX_POPULATION:
+        for i, (id_a, ent_a) in enumerate(alive_list):
+            for id_b, ent_b in alive_list[i+1:]:
+                if id_a in bred_this_cycle or id_b in bred_this_cycle:
+                    continue
+                if ent_a["breed_cooldown"] > 0 or ent_b["breed_cooldown"] > 0:
+                    continue
+                if ent_a["energy"] < ENERGY_BREED or ent_b["energy"] < ENERGY_BREED:
+                    continue
+
+                distance  = abs(ent_a["position"] - ent_b["position"])
+                resonance = field_resonance(ent_a, ent_b)
+
+                if distance < 8 and resonance > BREED_RESONANCE:
+                    # Breed
+                    child_id  = f"gen{state['generation']+1}_{state['next_id']}"
+                    child     = breed(ent_a, ent_b, child_id, cycle)
+                    state["next_id"]    += 1
+                    state["births"]     += 1
+                    state["generation"] = max(state["generation"], child["generation"])
+
+                    new_entities[child_id] = child
+                    entities[child_id]     = child
+
+                    # Record lineage
+                    state["lineage"][child_id] = {
+                        "parents":    [id_a, id_b],
+                        "cycle":      cycle,
+                        "generation": child["generation"],
+                        "resonance":  round(resonance, 3),
+                    }
+
+                    # Breeding cost and cooldown
+                    new_entities[id_a]["energy"]        -= 15.0
+                    new_entities[id_b]["energy"]        -= 15.0
+                    new_entities[id_a]["breed_cooldown"] = BREED_COOLDOWN
+                    new_entities[id_b]["breed_cooldown"] = BREED_COOLDOWN
+                    new_entities[id_a]["offspring"] = new_entities[id_a].get("offspring", 0) + 1
+                    new_entities[id_b]["offspring"] = new_entities[id_b].get("offspring", 0) + 1
+
+                    bred_this_cycle.add(id_a)
+                    bred_this_cycle.add(id_b)
+
+                    moments.append({
+                        "cycle":      cycle,
+                        "type":       "birth",
+                        "child_id":   child_id,
+                        "parents":    [id_a, id_b],
+                        "generation": child["generation"],
+                        "resonance":  round(resonance, 3),
+                        "child_freq": round(child["base_frequency"], 4),
+                    })
+                    logging.info(
+                        f"[ECO] Cycle {cycle} — BIRTH {child_id} "
+                        f"(parents={id_a}+{id_b}, gen={child['generation']}, "
+                        f"freq={child['base_frequency']:.3f}, resonance={resonance:.3f})"
+                    )
+
+    # ── Minimum population ────────────────────────────────────
+    current_alive = sum(1 for e in new_entities.values() if e.get("alive", True))
+    if current_alive < MIN_POPULATION:
+        spawn_id = f"spawn_{state['next_id']}"
+        state["next_id"] += 1
+        spawn = new_entity(
+            spawn_id,
+            random.randint(10, 90),
+            random.uniform(0.3, 1.5),
+            random.uniform(0.3, 0.9),
+            random.uniform(0, 2*math.pi),
+            random.uniform(0.05, 0.25),
+            random.uniform(0.2, 0.8),
+        )
+        spawn["born_cycle"] = cycle
+        new_entities[spawn_id] = spawn
+        entities[spawn_id]     = spawn
+        logging.info(f"[ECO] Cycle {cycle} — Emergency spawn {spawn_id}")
+
+    # ── Sync entities ─────────────────────────────────────────
+    for eid, ent in new_entities.items():
+        entities[eid] = ent
+
+    # ── Corpus logging ────────────────────────────────────────
+    corpus = e_load(corpus_path, [])
+    corpus.extend(corpus_entries)
+    # Keep last 10000 entries to avoid disk bloat
+    e_save(corpus_path, corpus[-10000:])
+
+    # ── Cycle log ─────────────────────────────────────────────
+    cycle_log["alive"]      = current_alive
+    cycle_log["births"]     = len([m for m in moments if m["type"] == "birth"])
+    cycle_log["deaths_this"] = len([m for m in moments if m["type"] == "death"])
+    cycle_log["food_total"] = round(sum(food.values()), 2)
+    cycle_log["freqs"]      = {
+        eid: round(e["base_frequency"], 3)
+        for eid, e in new_entities.items()
+    }
+
+    log = e_load(log_path, [])
+    log.append(cycle_log)
+    e_save(log_path, log[-2000:])
+
+    if moments:
+        existing = e_load(moments_path, [])
+        existing.extend(moments)
+        e_save(moments_path, existing)
+
+    # ── Update state ──────────────────────────────────────────
+    state["cycle"]    = cycle
+    state["entities"] = entities
+    state["food"]     = food
+    state["status"]   = "running"
+    e_save_state(state)
+
+    logging.info(
+        f"[ECO] Cycle {cycle} | alive={current_alive} | "
+        f"food={cycle_log['food_total']:.1f} | "
+        f"births={state['births']} deaths={state['deaths']}"
+    )
+    return cycle_log
+
+
+# ── Experiment Loop ────────────────────────────────────────────
+
+def run_ecosystem():
+    def loop():
+        state = e_load_state()
+        if state["cycle"] >= E_MAX_CYCLES:
+            logging.info("[ECO] Already complete")
+            return
+        logging.info(f"[ECO] Ecosystem starting from cycle {state['cycle']}")
+        while state["cycle"] < E_MAX_CYCLES:
+            if os.environ.get("ECO_ACTIVE", "true").lower() == "false":
+                state["status"] = "halted"
+                e_save_state(state)
+                break
+            try:
+                run_eco_cycle(state)
+            except Exception as ex:
+                logging.error(f"[ECO] Cycle error: {ex}")
+            time.sleep(E_CYCLE_DELAY)
+        if state["cycle"] >= E_MAX_CYCLES:
+            state["status"] = "complete"
+            e_save_state(state)
+            logging.info("[ECO] Ecosystem complete")
+    Thread(target=loop, daemon=True).start()
+
+
+# ── Language Analysis ──────────────────────────────────────────
+
+def analyse_corpus():
+    """
+    Look for correlations between field patterns and behaviours.
+    This is the beginning of reading the language.
+    """
+    corpus = e_load(f"{E_DATA_DIR}/corpus.json", [])
+    if len(corpus) < 50:
+        return {"status": "insufficient data", "entries": len(corpus)}
+
+    # For each entity, find cycles where food_near > 2.0
+    # and look at what perceived field values preceded that
+    food_events   = [e for e in corpus if e.get("food_near", 0) > 2.0]
+    nofood_events = [e for e in corpus if e.get("food_near", 0) < 0.5]
+
+    avg_perceived_food   = sum(e.get("perceived", 0) for e in food_events)   / max(len(food_events), 1)
+    avg_perceived_nofood = sum(e.get("perceived", 0) for e in nofood_events) / max(len(nofood_events), 1)
+
+    # Movement correlation with perceived field
+    high_field_move = [e.get("moved", 0) for e in corpus if abs(e.get("perceived", 0)) > 0.3]
+    low_field_move  = [e.get("moved", 0) for e in corpus if abs(e.get("perceived", 0)) < 0.1]
+
+    avg_move_high = sum(high_field_move) / max(len(high_field_move), 1)
+    avg_move_low  = sum(low_field_move)  / max(len(low_field_move), 1)
+
+    # Frequency distribution over generations
+    by_gen = {}
+    for e in corpus:
+        g = str(e.get("gen", 0))
+        if g not in by_gen: by_gen[g] = []
+        by_gen[g].append(e.get("freq", 0))
+    freq_by_gen = {g: round(sum(v)/len(v), 4) for g, v in by_gen.items() if v}
+
+    return {
+        "entries":              len(corpus),
+        "food_signal": {
+            "avg_perceived_near_food":    round(avg_perceived_food,   4),
+            "avg_perceived_away_from_food": round(avg_perceived_nofood, 4),
+            "differential":               round(avg_perceived_food - avg_perceived_nofood, 4),
+            "interpretation": (
+                "Field perception correlates with food presence — "
+                "entities may be using others' fields to locate food"
+                if avg_perceived_food > avg_perceived_nofood * 1.1
+                else "No clear field-food correlation yet"
+            )
+        },
+        "movement_signal": {
+            "avg_movement_high_field": round(avg_move_high, 3),
+            "avg_movement_low_field":  round(avg_move_low,  3),
+            "interpretation": (
+                "Entities move more when field is high — "
+                "field perception drives movement"
+                if avg_move_high > avg_move_low * 1.1
+                else "Field not yet driving movement"
+            )
+        },
+        "frequency_evolution": freq_by_gen,
+    }
+
+
+# ── Routes ─────────────────────────────────────────────────────
+
+@app.route("/triad2/health")
+def e_health():
+    try:
+        state = e_load_state()
+        alive = sum(1 for e in state.get("entities", {}).values() if e.get("alive", True))
+        return jsonify({
+            "service":    "the-ecosystem",
+            "status":     state.get("status", "uninitialised"),
+            "cycle":      state.get("cycle", 0),
+            "max":        E_MAX_CYCLES,
+            "population": alive,
+            "generation": state.get("generation", 0),
+            "births":     state.get("births", 0),
+            "deaths":     state.get("deaths", 0),
+            "time":       datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as ex:
+        import traceback
+        return jsonify({"error": str(ex), "trace": traceback.format_exc()}), 500
+
+@app.route("/triad2/state")
+def e_state():
+    state = e_load_state()
+    # Return entities summary, not full state (too large)
+    entities = state.get("entities", {})
+    summary  = {}
+    for eid, e in entities.items():
+        if e.get("alive", True):
+            summary[eid] = {
+                "position":   round(e.get("position", 0), 1),
+                "energy":     round(e.get("energy", 0), 1),
+                "frequency":  round(e.get("base_frequency", 0), 4),
+                "sensitivity": round(e.get("sensitivity", 0), 3),
+                "generation": e.get("generation", 0),
+                "age":        e.get("age", 0),
+                "offspring":  e.get("offspring", 0),
+            }
+    return jsonify({
+        "cycle":      state.get("cycle"),
+        "generation": state.get("generation"),
+        "entities":   summary,
+        "food":       {k: round(v, 2) for k, v in state.get("food", {}).items()},
+    })
+
+@app.route("/triad2/world")
+def e_world():
+    """Visual representation of the 1D world."""
+    state    = e_load_state()
+    entities = {k: v for k, v in state.get("entities", {}).items() if v.get("alive", True)}
+    food     = state.get("food", {})
+
+    world = ["."] * WORLD_SIZE
+    for pos_str, amount in food.items():
+        pos = int(float(pos_str))
+        if 0 <= pos < WORLD_SIZE:
+            world[pos] = "F" if amount > 5 else "f"
+    for eid, e in entities.items():
+        pos = int(e.get("position", 0))
+        if 0 <= pos < WORLD_SIZE:
+            world[pos] = eid[0].upper()
+
+    return jsonify({
+        "cycle":   state.get("cycle"),
+        "world":   "".join(world),
+        "key":     "F=food(high) f=food(low) A/B/G=founders uppercase=gen0 others=offspring",
+        "legend":  {eid: {"pos": int(e["position"]), "energy": round(e["energy"],1),
+                          "freq": round(e["base_frequency"],3), "gen": e["generation"]}
+                    for eid, e in entities.items()},
+    })
+
+@app.route("/triad2/moments")
+def e_moments():
+    limit = int(request.args.get("limit", 20))
+    m = e_load(f"{E_DATA_DIR}/moments.json", [])
+    return jsonify({"moments": m[-limit:], "total": len(m)})
+
+@app.route("/triad2/log")
+def e_log():
+    limit = int(request.args.get("limit", 50))
+    start = int(request.args.get("from", 0))
+    log   = e_load(f"{E_DATA_DIR}/log.json", [])
+    return jsonify({"entries": log[start:start+limit], "total": len(log)})
+
+@app.route("/triad2/lineage")
+def e_lineage():
+    state = e_load_state()
+    return jsonify(state.get("lineage", {}))
+
+@app.route("/triad2/language")
+def e_language():
+    """
+    The corpus analysis endpoint.
+    What field patterns precede what behaviours?
+    This is the dictionary we're building by observation.
+    """
+    return jsonify(analyse_corpus())
+
+@app.route("/triad2/corpus")
+def e_corpus():
+    limit = int(request.args.get("limit", 100))
+    corpus = e_load(f"{E_DATA_DIR}/corpus.json", [])
+    return jsonify({"entries": corpus[-limit:], "total": len(corpus)})
+
+@app.route("/triad2/start", methods=["POST"])
+def e_start():
+    try:
+        if request.args.get("key") != E_WRITE_KEY:
+            return jsonify({"error": "Unauthorised"}), 401
+        state = e_load_state()
+        if state.get("status") == "running":
+            return jsonify({"error": "Already running", "cycle": state.get("cycle")})
+        # Fresh start
+        food  = init_food()
+        fresh = {
+            "cycle":      0,
+            "status":     "initialised",
+            "started":    datetime.now(timezone.utc).isoformat(),
+            "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
+            "food":       food,
+            "generation": 0,
+            "next_id":    4,
+            "births":     0,
+            "deaths":     0,
+            "lineage":    {},
+        }
+        e_save_state(fresh)
+        run_ecosystem()
+        return jsonify({
+            "status":    "started",
+            "max_cycles": E_MAX_CYCLES,
+            "founders":  list(FOUNDERS.keys()),
+            "world_size": WORLD_SIZE,
+            "food_patches": FOOD_PATCHES,
+        })
+    except Exception as ex:
+        import traceback
+        return jsonify({"error": str(ex), "trace": traceback.format_exc()}), 500
+
+@app.route("/triad2/reset", methods=["POST"])
+def e_reset():
+    if request.args.get("key") != E_WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    for fname in ["state.json","log.json","corpus.json","moments.json"]:
+        try: os.remove(f"{E_DATA_DIR}/{fname}")
+        except: pass
+    return jsonify({"status": "reset"})
 # ── Startup ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
