@@ -2202,6 +2202,7 @@ def run_eco_cycle(state):
 # ── Experiment Loop ────────────────────────────────────────────
 
 def run_ecosystem():
+    from threading import Thread
     def loop():
         state = e_load_state()
         if state["cycle"] >= E_MAX_CYCLES:
