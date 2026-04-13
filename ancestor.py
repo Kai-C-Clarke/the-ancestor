@@ -1639,27 +1639,30 @@ def t_summary():
 
 @app.route("/triad/start", methods=["POST"])
 def t_start():
-    if request.args.get("key") != T_WRITE_KEY:
-        return jsonify({"error": "Unauthorised"}), 401
-    state = t_load_state()
-    if state.get("status") == "running":
-        return jsonify({"error": "Already running", "cycle": state.get("cycle")})
-    # Reset to fresh start with seed configurations
-    fresh = {
-        "cycle":     0,
-        "status":    "initialised",
-        "started":   datetime.now(timezone.utc).isoformat(),
-        "instances": {name: dict(seed) for name, seed in INSTANCE_SEEDS.items()},
-        "fitness":   {name: 0.5 for name in INSTANCE_SEEDS},
-    }
-    t_save_state(fresh)
-    run_triad()
-    return jsonify({
-        "status":      "started",
-        "max_cycles":  T_MAX_CYCLES,
-        "instances":   list(INSTANCE_SEEDS.keys()),
-        "characters": {n: s["character"] for n, s in INSTANCE_SEEDS.items()},
-    })
+    try:
+        if request.args.get("key") != T_WRITE_KEY:
+            return jsonify({"error": "Unauthorised"}), 401
+        state = t_load_state()
+        if state.get("status") == "running":
+            return jsonify({"error": "Already running", "cycle": state.get("cycle")})
+        fresh = {
+            "cycle":     0,
+            "status":    "initialised",
+            "started":   datetime.now(timezone.utc).isoformat(),
+            "instances": {name: dict(seed) for name, seed in INSTANCE_SEEDS.items()},
+            "fitness":   {name: 0.5 for name in INSTANCE_SEEDS},
+        }
+        t_save_state(fresh)
+        run_triad()
+        return jsonify({
+            "status":     "started",
+            "max_cycles": T_MAX_CYCLES,
+            "instances":  list(INSTANCE_SEEDS.keys()),
+            "characters": {n: s["character"] for n, s in INSTANCE_SEEDS.items()},
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 @app.route("/triad/reset", methods=["POST"])
 def t_reset():
