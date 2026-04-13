@@ -552,9 +552,10 @@ def run_experiment():
                 save_state(state)
                 break
 
-            # Fitness ceiling gate
-            if state["fitness"] >= FITNESS_CEILING:
-                logging.info(f"[ANCESTOR] Fitness ceiling {FITNESS_CEILING} reached at gen {state['generation']} — pausing for review")
+            # Fitness ceiling gate — respect override if set
+            ceiling = state.get("ceiling_override", FITNESS_CEILING)
+            if state["fitness"] >= ceiling:
+                logging.info(f"[ANCESTOR] Fitness ceiling {ceiling} reached at gen {state['generation']} — pausing for review")
                 state["status"] = "ceiling_reached"
                 save_state(state)
                 break
@@ -669,6 +670,36 @@ def start():
         return jsonify({"error": "Already running", "generation": state.get("generation")})
     run_experiment()
     return jsonify({"status": "started", "max_generations": MAX_GENERATIONS})
+
+@app.route("/resume", methods=["POST"])
+def resume():
+    """Resume from ceiling_reached status with an optional new ceiling."""
+    if request.args.get("key") != WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    state = load_json(STATE_FILE, None)
+    if not state:
+        return jsonify({"error": "No state found. POST /start first."})
+    if state.get("status") == "running":
+        return jsonify({"error": "Already running", "generation": state.get("generation")})
+
+    # Allow ceiling override via query param
+    new_ceiling = request.args.get("ceiling")
+    if new_ceiling:
+        try:
+            state["ceiling_override"] = float(new_ceiling)
+            save_state(state)
+        except ValueError:
+            return jsonify({"error": "Invalid ceiling value"})
+
+    state["status"] = "running"
+    save_state(state)
+    run_experiment()
+    return jsonify({
+        "status":       "resumed",
+        "generation":   state.get("generation"),
+        "ceiling":      state.get("ceiling_override", FITNESS_CEILING),
+        "max":          MAX_GENERATIONS
+    })
 
 @app.route("/reset", methods=["POST"])
 def reset():
