@@ -1673,6 +1673,16 @@ def t_reset():
         try: os.remove(f"{T_DATA_DIR}/{fname}")
         except Exception: pass
     return jsonify({"status": "reset"})
+
+
+# ══════════════════════════════════════════════════════════════
+# THE WORLD — Artificial Life Substrate
+# Space + Food + Energy + Breeding + Death + Lineage
+# Observation corpus for emergent language analysis
+# Runs on /world/* routes
+# ══════════════════════════════════════════════════════════════
+
+
 # ── Startup ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
