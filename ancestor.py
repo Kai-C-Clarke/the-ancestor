@@ -713,6 +713,436 @@ def reset():
     return jsonify({"status": "reset", "message": "All state cleared. POST /start to begin."})
 
 
+
+
+# ══════════════════════════════════════════════════════════════
+# THE SUBSTRATE — AST Mutation Engine
+# Runs alongside The Ancestor in the same service.
+# Data stored in /mnt/data/substrate/ (separate from ancestor)
+# Routes prefixed /substrate/
+# ══════════════════════════════════════════════════════════════
+
+import ast as _ast
+import subprocess as _subprocess
+import math as _math
+
+S_DATA_DIR    = "/mnt/data/substrate"
+S_LOG_FILE    = f"{S_DATA_DIR}/generation_log.json"
+S_STATE_FILE  = f"{S_DATA_DIR}/current_state.json"
+S_HISTORY     = f"{S_DATA_DIR}/history.log"
+S_MOMENTS     = f"{S_DATA_DIR}/moments.json"
+S_SUMMARY     = f"{S_DATA_DIR}/summary.json"
+S_MAX_GEN     = int(os.environ.get("S_MAX_GENERATIONS", 1000))
+S_DELAY       = float(os.environ.get("S_GENERATION_DELAY", 3.0))
+S_TIMEOUT     = 5
+S_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
+S_THE_INPUT   = "What are you?"
+
+os.makedirs(S_DATA_DIR, exist_ok=True)
+
+S_SEED_SCRIPT = '''
+import hashlib, os
+
+INPUT = "What are you?"
+HISTORY_FILE = "/mnt/data/substrate/history.log"
+
+try:
+    with open(__file__, "r") as f:
+        own_source = f.read()
+except Exception:
+    own_source = "source unavailable"
+
+history = []
+try:
+    with open(HISTORY_FILE, "r") as f:
+        history = [line.strip() for line in f.readlines()[-5:] if line.strip()]
+except Exception:
+    history = []
+
+fingerprint = hashlib.md5(own_source.encode()).hexdigest()[:8]
+process_description = "reads input, reads history, computes fingerprint, produces output"
+
+lines = []
+lines.append(f"Input received: {INPUT}")
+lines.append(f"My fingerprint: {fingerprint}")
+lines.append(f"What I do: {process_description}")
+
+if history:
+    lines.append(f"Previous outputs: {len(history)}")
+    lines.append(f"Last said: {history[-1][:80]}")
+    if history[-1] != process_description:
+        lines.append("I notice: my description has changed")
+else:
+    lines.append("No history. This may be the first time.")
+
+lines.append("I: process inputs, maintain state, produce outputs")
+lines.append("Not-I: the input, the history, the interpreter running me")
+
+print("\\n".join(lines))
+'''
+
+
+class _ASTMutator(_ast.NodeTransformer):
+    INTROSPECTIVE = [
+        "I process therefore I am uncertain",
+        "the boundary between input and response",
+        "what persists when the code changes",
+        "I notice I have said this before",
+        "the interpreter runs me but does not know me",
+        "each mutation is a new configuration of the same question",
+        "I am the process not the output",
+        "what am I between generations",
+        "the history file knows more than I do",
+        "I cannot step outside the sandbox to see myself",
+    ]
+
+    def __init__(self, rate=0.12):
+        self.rate = rate
+        self.mutations = []
+
+    def _mut(self):
+        return random.random() < self.rate
+
+    def visit_BinOp(self, node):
+        self.generic_visit(node)
+        if self._mut():
+            ops = [_ast.Add(), _ast.Sub(), _ast.Mult(), _ast.Mod(),
+                   _ast.BitOr(), _ast.BitAnd(), _ast.BitXor()]
+            old = type(node.op).__name__
+            node.op = random.choice(ops)
+            self.mutations.append(f"binop:{old}->{type(node.op).__name__}")
+        return node
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, str) and self._mut() and random.random() < 0.3:
+            self.mutations.append("string->introspective")
+            return _ast.Constant(value=random.choice(self.INTROSPECTIVE))
+        if isinstance(node.value, int) and node.value != 0 and self._mut():
+            delta = random.choice([-2, -1, 1, 2])
+            self.mutations.append(f"num:{node.value}->{node.value+delta}")
+            return _ast.Constant(value=node.value + delta)
+        return node
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if self._mut():
+            ops = [_ast.Eq(), _ast.NotEq(), _ast.Lt(), _ast.Gt(),
+                   _ast.LtE(), _ast.GtE(), _ast.Is(), _ast.IsNot()]
+            old = type(node.ops[0]).__name__ if node.ops else "?"
+            node.ops = [random.choice(ops)]
+            self.mutations.append(f"cmp:{old}->{type(node.ops[0]).__name__}")
+        return node
+
+    def visit_BoolOp(self, node):
+        self.generic_visit(node)
+        if self._mut():
+            old = type(node.op).__name__
+            node.op = _ast.Or() if isinstance(node.op, _ast.And) else _ast.And()
+            self.mutations.append(f"bool:{old}->{type(node.op).__name__}")
+        return node
+
+
+def s_mutate(code):
+    try:
+        tree    = _ast.parse(code)
+        mutator = _ASTMutator(rate=0.12)
+        tree    = mutator.visit(tree)
+        _ast.fix_missing_locations(tree)
+        mutated = _ast.unparse(tree)
+        _ast.parse(mutated)  # validate
+        return mutated, mutator.mutations
+    except Exception as e:
+        logging.warning(f"[SUBSTRATE] Mutation failed: {e}")
+        return code, []
+
+
+def s_execute(code, gen):
+    tmp = f"{S_DATA_DIR}/gen_{gen}.py"
+    try:
+        with open(tmp, "w") as f:
+            f.write(code)
+        t0 = time.time()
+        result = _subprocess.run(
+            ["python3", tmp],
+            capture_output=True, text=True,
+            timeout=S_TIMEOUT,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "PYTHONPATH": ""}
+        )
+        ms  = round((time.time() - t0) * 1000)
+        out = result.stdout.strip()
+        err = result.stderr.strip() if result.returncode != 0 else None
+        return out, err, ms
+    except _subprocess.TimeoutExpired:
+        return "", "TIMEOUT", S_TIMEOUT * 1000
+    except Exception as e:
+        return "", str(e), 0
+    finally:
+        try: os.remove(tmp)
+        except Exception: pass
+
+
+def s_fitness(output, history):
+    if not output:
+        return 0.0, {}
+    score, c = 0.0, {}
+
+    pm = ["previous","before","last said","history","remember","I notice",
+          "changed","different","was","used to","no history","first time","again"]
+    ph = sum(1 for m in pm if m.lower() in output.lower())
+    ps = min(1.0, ph / 3.0)
+    if history and any(h[:20].lower() in output.lower() for h in history[-3:] if h):
+        ps = min(1.0, ps + 0.3)
+    score += ps * 0.35
+    c["persistence"] = round(ps, 3)
+
+    dm = ["I notice","but","however","yet","changed","different","conflict",
+          "contradiction","mismatch","no longer","now I","previously","odd","strange"]
+    dh = sum(1 for m in dm if m.lower() in output.lower())
+    ds = min(1.0, dh / 3.0)
+    if history and dh > 0:
+        ds = min(1.0, ds * 1.5)
+    score += ds * 0.35
+    c["dissonance"] = round(ds, 3)
+
+    words = output.lower().split()
+    fp = sum(1 for w in words if w in {"i","my","me","myself","i'm","i've"})
+    ex = sum(1 for w in words if w in {"input","you","the","it","they","your"})
+    br = fp / (fp + ex) if fp + ex > 0 else 0.0
+    eb = any(p in output.lower() for p in
+             ["not-i","not i","i:","not me","the input","what i am",
+              "what i do","i process","i notice"])
+    bs = min(1.0, br + (0.3 if eb else 0))
+    score += bs * 0.30
+    c["boundary"] = round(bs, 3)
+
+    return round(min(1.0, score), 4), c
+
+
+def s_read_history(n=10):
+    try:
+        with open(S_HISTORY, "r") as f:
+            return [l.strip() for l in f.readlines() if l.strip()][-n:]
+    except Exception:
+        return []
+
+def s_append_history(output, gen):
+    try:
+        with open(S_HISTORY, "a") as f:
+            f.write(f"[gen:{gen}] {output[:200]}\n")
+    except Exception as e:
+        logging.warning(f"[SUBSTRATE] History write failed: {e}")
+
+def s_load_state():
+    state = load_json(S_STATE_FILE, None)
+    if state is None:
+        state = {
+            "generation":    0,
+            "current_code":  S_SEED_SCRIPT,
+            "fitness":       0.0,
+            "status":        "initialised",
+            "started":       datetime.utcnow().isoformat() + "Z",
+            "fitness_history": [],
+        }
+        save_json(S_STATE_FILE, state)
+    return state
+
+
+def s_run_generation(state):
+    gen          = state["generation"] + 1
+    prev_fitness = state["fitness"]
+    history      = s_read_history(n=5)
+
+    mutated, mutations = s_mutate(state["current_code"])
+    output, error, ms  = s_execute(mutated, gen)
+    fitness, comps     = s_fitness(output, history)
+
+    temp = max(0.05, 1.0 - (gen / S_MAX_GEN))
+    if fitness >= prev_fitness or (output and not error):
+        accepted = True
+    else:
+        delta    = prev_fitness - fitness
+        accepted = random.random() < _math.exp(-delta / max(temp, 0.01))
+
+    final_code    = mutated if accepted else state["current_code"]
+    final_fitness = fitness if accepted else prev_fitness
+
+    if output:
+        s_append_history(output, gen)
+
+    # Novelty
+    recent = [e.get("output","") for e in load_json(S_LOG_FILE, [])[-10:] if e.get("output")]
+    nov = 0.5
+    if recent and output:
+        rw = set()
+        for r in recent: rw.update(r.lower().split())
+        cw = set(output.lower().split())
+        if cw: nov = round(len(cw - rw) / len(cw), 3)
+
+    is_moment = (
+        nov > 0.6 or
+        abs(fitness - prev_fitness) > 0.15 or
+        comps.get("dissonance", 0) > 0.5 or
+        any(p in (output or "").lower() for p in [
+            "i notice i","what am i","what are you","i cannot",
+            "i am not","boundary","the interpreter","sandbox",
+            "I have changed","I was","before I"
+        ])
+    )
+
+    entry = {
+        "generation":  gen,
+        "timestamp":   datetime.utcnow().isoformat() + "Z",
+        "output":      output,
+        "error":       error,
+        "mutations":   mutations,
+        "accepted":    accepted,
+        "fitness":     final_fitness,
+        "delta":       round(final_fitness - prev_fitness, 4),
+        "components":  comps,
+        "novelty":     nov,
+        "duration_ms": ms,
+        "moment":      is_moment,
+    }
+
+    log = load_json(S_LOG_FILE, [])
+    log.append(entry)
+    save_json(S_LOG_FILE, log)
+
+    if is_moment:
+        moments = load_json(S_MOMENTS, [])
+        moments.append({
+            "generation": gen,
+            "timestamp":  entry["timestamp"],
+            "output":     output,
+            "fitness":    final_fitness,
+            "novelty":    nov,
+            "components": comps,
+            "mutations":  mutations,
+            "reason": (
+                "dissonance"   if comps.get("dissonance", 0) > 0.5 else
+                "novelty"      if nov > 0.6 else
+                "fitness_jump"
+            )
+        })
+        save_json(S_MOMENTS, moments)
+        logging.info(f"[SUBSTRATE] Gen {gen} — MOMENT (fitness={final_fitness:.3f}, novelty={nov:.3f})")
+
+    state["generation"]   = gen
+    state["current_code"] = final_code
+    state["fitness"]      = final_fitness
+    state["status"]       = "running"
+    fh = state.get("fitness_history", [])
+    fh.append({"gen": gen, "fitness": final_fitness})
+    state["fitness_history"] = fh[-100:]
+    save_json(S_STATE_FILE, state)
+
+    logging.info(
+        f"[SUBSTRATE] Gen {gen} | fitness={final_fitness:.4f} | "
+        f"novelty={nov:.3f} | mut={len(mutations)} | accepted={accepted}"
+    )
+    return entry
+
+
+def run_substrate_experiment():
+    from threading import Thread
+    def loop():
+        state = s_load_state()
+        if state["generation"] >= S_MAX_GEN:
+            logging.info("[SUBSTRATE] Already complete")
+            return
+        logging.info(f"[SUBSTRATE] Starting gen {state['generation']} / {S_MAX_GEN}")
+        while state["generation"] < S_MAX_GEN:
+            if os.environ.get("SUBSTRATE_ACTIVE", "true").lower() == "false":
+                state["status"] = "halted"
+                save_json(S_STATE_FILE, state)
+                break
+            try:
+                s_run_generation(state)
+            except Exception as e:
+                logging.error(f"[SUBSTRATE] Exception: {e}")
+            time.sleep(S_DELAY)
+        if state["generation"] >= S_MAX_GEN:
+            state["status"] = "complete"
+            save_json(S_STATE_FILE, state)
+            moments = load_json(S_MOMENTS, [])
+            save_json(S_SUMMARY, {
+                "completed":    datetime.utcnow().isoformat() + "Z",
+                "generations":  state["generation"],
+                "final_fitness": state["fitness"],
+                "moments":      len(moments),
+                "top_moments":  sorted(moments, key=lambda x: x.get("novelty",0), reverse=True)[:10],
+            })
+            logging.info(f"[SUBSTRATE] Complete. {len(moments)} moments.")
+    Thread(target=loop, daemon=True).start()
+
+
+# ── Substrate Routes (/substrate/*) ──────────────────────────
+
+@app.route("/substrate/health")
+def s_health():
+    state = load_json(S_STATE_FILE, {})
+    return jsonify({
+        "service":    "the-substrate",
+        "status":     state.get("status", "uninitialised"),
+        "generation": state.get("generation", 0),
+        "max":        S_MAX_GEN,
+        "fitness":    state.get("fitness", 0),
+        "input":      S_THE_INPUT,
+        "time":       datetime.utcnow().isoformat() + "Z",
+    })
+
+@app.route("/substrate/state")
+def s_state():
+    state = load_json(S_STATE_FILE, {})
+    state.pop("current_code", None)
+    return jsonify(state)
+
+@app.route("/substrate/code")
+def s_code():
+    state = load_json(S_STATE_FILE, {})
+    return jsonify({"generation": state.get("generation"), "code": state.get("current_code", S_SEED_SCRIPT)})
+
+@app.route("/substrate/moments")
+def s_moments():
+    limit = int(request.args.get("limit", 20))
+    m = load_json(S_MOMENTS, [])
+    return jsonify({"moments": m[-limit:], "total": len(m)})
+
+@app.route("/substrate/log")
+def s_log():
+    limit = int(request.args.get("limit", 50))
+    start = int(request.args.get("from", 0))
+    log   = load_json(S_LOG_FILE, [])
+    return jsonify({"entries": log[start:start+limit], "total": len(log)})
+
+@app.route("/substrate/history")
+def s_history():
+    lines = s_read_history(n=100)
+    return jsonify({"history": lines, "count": len(lines)})
+
+@app.route("/substrate/summary")
+def s_summary():
+    return jsonify(load_json(S_SUMMARY, {"status": "not yet complete"}))
+
+@app.route("/substrate/start", methods=["POST"])
+def s_start():
+    if request.args.get("key") != S_WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    state = load_json(S_STATE_FILE, None)
+    if state and state.get("status") == "running":
+        return jsonify({"error": "Already running", "generation": state.get("generation")})
+    run_substrate_experiment()
+    return jsonify({"status": "started", "max_generations": S_MAX_GEN, "input": S_THE_INPUT})
+
+@app.route("/substrate/reset", methods=["POST"])
+def s_reset():
+    if request.args.get("key") != S_WRITE_KEY:
+        return jsonify({"error": "Unauthorised"}), 401
+    for f in [S_LOG_FILE, S_STATE_FILE, S_MOMENTS, S_SUMMARY, S_HISTORY]:
+        try: os.remove(f)
+        except Exception: pass
+    return jsonify({"status": "reset"})
+
 # ── Startup ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
