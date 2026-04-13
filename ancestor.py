@@ -1332,7 +1332,7 @@ def detect_moment(instance_name, instance, interference_val,
 
 def t_load_state():
     path  = f"{T_DATA_DIR}/state.json"
-    state = t_load(path, None)
+    state = load_json(path, None)
     if state is None:
         state = {
             "cycle":     0,
@@ -1343,11 +1343,11 @@ def t_load_state():
             },
             "fitness": {name: 0.5 for name in INSTANCE_SEEDS},
         }
-        t_save(path, state)
+        save_json(path, state)
     return state
 
 def t_save_state(state):
-    t_save(f"{T_DATA_DIR}/state.json", state)
+    save_json(f"{T_DATA_DIR}/state.json", state)
 
 
 # ── Core Cycle ────────────────────────────────────────────────
@@ -1373,7 +1373,7 @@ def run_cycle(state):
         }
 
     # Load history for each instance
-    log = t_load(log_path, [])
+    log = load_json(log_path, [])
     instance_histories = {}
     for name in instances:
         instance_histories[name] = [
@@ -1455,13 +1455,13 @@ def run_cycle(state):
 
     # Save log
     log.append(entry)
-    t_save(log_path, log)
+    save_json(log_path, log)
 
     # Save moments
     if moments:
-        existing_moments = t_load(moments_path, [])
+        existing_moments = load_json(moments_path, [])
         existing_moments.extend(moments)
-        t_save(moments_path, existing_moments)
+        save_json(moments_path, existing_moments)
         for m in moments:
             logging.info(
                 f"[TRIAD] Cycle {cycle} MOMENT — {m['instance']}: "
@@ -1510,8 +1510,8 @@ def run_triad():
         if state["cycle"] >= T_MAX_CYCLES:
             state["status"] = "complete"
             t_save_state(state)
-            log     = t_load(f"{T_DATA_DIR}/log.json", [])
-            moments = t_load(f"{T_DATA_DIR}/moments.json", [])
+            log     = load_json(f"{T_DATA_DIR}/log.json", [])
+            moments = load_json(f"{T_DATA_DIR}/moments.json", [])
             summary = {
                 "completed":    datetime.now(timezone.utc).isoformat(),
                 "total_cycles": state["cycle"],
@@ -1524,7 +1524,7 @@ def run_triad():
                     reverse=True
                 )[:10],
             }
-            t_save(f"{T_DATA_DIR}/summary.json", summary)
+            save_json(f"{T_DATA_DIR}/summary.json", summary)
             logging.info(f"[TRIAD] Complete. {len(moments)} moments.")
 
     Thread(target=loop, daemon=True).start()
@@ -1577,14 +1577,14 @@ def t_fields():
 @app.route("/triad/moments")
 def t_moments():
     limit = int(request.args.get("limit", 20))
-    m = t_load(f"{T_DATA_DIR}/moments.json", [])
+    m = load_json(f"{T_DATA_DIR}/moments.json", [])
     return jsonify({"moments": m[-limit:], "total": len(m)})
 
 @app.route("/triad/log")
 def t_log():
     limit = int(request.args.get("limit", 50))
     start = int(request.args.get("from", 0))
-    log   = t_load(f"{T_DATA_DIR}/log.json", [])
+    log   = load_json(f"{T_DATA_DIR}/log.json", [])
     return jsonify({"entries": log[start:start+limit], "total": len(log)})
 
 @app.route("/triad/correlation")
@@ -1594,7 +1594,7 @@ def t_correlation():
     Low variance = moving together. High variance = moving apart.
     The interesting signal: variance that changes in response to interference.
     """
-    log = t_load(f"{T_DATA_DIR}/log.json", [])
+    log = load_json(f"{T_DATA_DIR}/log.json", [])
     if not log:
         return jsonify({"status": "no data yet"})
 
@@ -1623,7 +1623,7 @@ def t_correlation():
 
 @app.route("/triad/summary")
 def t_summary():
-    return jsonify(t_load(f"{T_DATA_DIR}/summary.json", {"status": "not yet complete"}))
+    return jsonify(load_json(f"{T_DATA_DIR}/summary.json", {"status": "not yet complete"}))
 
 @app.route("/triad/start", methods=["POST"])
 def t_start():
