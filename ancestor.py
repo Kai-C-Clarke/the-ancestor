@@ -1151,6 +1151,14 @@ def s_reset():
 # Runs on /triad/* routes alongside Ancestor and Substrate.
 # ══════════════════════════════════════════════════════════════
 
+# ── Triad Config ──────────────────────────────────────────────
+T_DATA_DIR   = "/mnt/data/triad"
+T_WRITE_KEY  = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
+T_MAX_CYCLES = int(os.environ.get("T_MAX_CYCLES", 1000))
+T_CYCLE_DELAY = float(os.environ.get("T_CYCLE_DELAY", 2.0))
+
+os.makedirs(T_DATA_DIR, exist_ok=True)
+
 # ── Instance Definitions — Born Different ─────────────────────
 #
 # Three genuinely different starting configurations.
@@ -1534,15 +1542,19 @@ def run_triad():
 
 @app.route("/triad/health")
 def t_health():
-    state = t_load_state()
-    return jsonify({
-        "service":    "the-triad",
-        "status":     state.get("status", "uninitialised"),
-        "cycle":      state.get("cycle", 0),
-        "max":        T_MAX_CYCLES,
-        "fitness":    state.get("fitness", {}),
-        "time":       datetime.now(timezone.utc).isoformat(),
-    })
+    try:
+        state = t_load_state()
+        return jsonify({
+            "service":    "the-triad",
+            "status":     state.get("status", "uninitialised"),
+            "cycle":      state.get("cycle", 0),
+            "max":        T_MAX_CYCLES,
+            "fitness":    state.get("fitness", {}),
+            "time":       datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 @app.route("/triad/state")
 def t_state():
