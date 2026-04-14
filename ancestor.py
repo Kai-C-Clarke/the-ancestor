@@ -1716,6 +1716,14 @@ MAX_POPULATION  = 16     # larger possible population
 MIN_POPULATION  = 3      # maintain at least 3 entities
 FIELD_DECAY     = 0.08   # slower field decay — signals travel further
 
+# Predator parameters
+PREDATOR_SPEED       = 4.0    # max movement per cycle
+PREDATOR_HUNT_RADIUS = 8.0    # detection range for prey
+PREDATOR_ATTACK_DIST = 4.0    # attack range
+PREDATOR_DAMAGE      = 12.0   # energy drained per cycle when attacking
+PREDATOR_SENSITIVITY = 0.6    # initial sensitivity to prey fields
+PREDATOR_MUT_RATE    = 0.08   # predator mutation rate
+
 os.makedirs(E_DATA_DIR, exist_ok=True)
 
 def e_load(path, default):
@@ -1827,20 +1835,21 @@ def food_gradient(food_patches, position):
 
 # ── Movement ───────────────────────────────────────────────────
 
-def decide_movement(entity, food_patches, all_entities, perceived):
+def decide_movement(entity, food_patches, all_entities, perceived,
+                    evasion_dir=0.0, threat_level=0.0):
     """
     Movement decision — NOT designed, emerges from mutation.
-    But the initial seed uses a simple gradient-following rule
-    that mutations will distort over generations.
+    Evasion pressure from predator detection added as external force.
+    The interplay between food-seeking and predator-fleeing is
+    where interesting movement patterns emerge.
 
-    Returns: delta_position (-5 to +5)
+    Returns: (new_position, distance_moved)
     """
     # Food gradient pull
     food_dir  = food_gradient(food_patches, entity["position"])
     food_pull = food_dir * 3.0
 
     # Field gradient — move toward higher perceived field
-    # (which correlates with others' presence)
     field_pull = 0.0
     left_field = right_field = 0.0
     for other_id, other in all_entities.items():
@@ -1853,18 +1862,20 @@ def decide_movement(entity, food_patches, all_entities, perceived):
     if right_field > left_field * 1.2:  field_pull =  2.0
     elif left_field > right_field * 1.2: field_pull = -2.0
 
-    # Sensitivity determines how much field gradient affects movement
     sensitivity = entity.get("sensitivity", 0.5)
-    move = food_pull + field_pull * sensitivity
 
-    # Add mutation-driven noise
+    # Predator evasion — overrides food-seeking when threat is high
+    evasion_pull = evasion_dir * threat_level * 6.0 * sensitivity
+
+    # Combined movement
+    move = food_pull + field_pull * sensitivity + evasion_pull
+
+    # Mutation-driven noise
     noise = random.gauss(0, entity.get("mutation_rate", 0.1) * 5)
     move += noise
 
-    # Clamp and return
-    move = max(-8.0, min(8.0, move))
-    new_pos = entity["position"] + move
-    new_pos = max(0.0, min(float(WORLD_SIZE - 1), new_pos))
+    move    = max(-10.0, min(10.0, move))
+    new_pos = max(0.0, min(float(WORLD_SIZE - 1), entity["position"] + move))
     return new_pos, abs(move)
 
 
@@ -1986,17 +1997,172 @@ def e_load_state():
             "started":    datetime.now(timezone.utc).isoformat(),
             "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
             "food":       food,
+            "predator":   init_predator(),
             "generation": 0,
             "next_id":    4,
             "births":     0,
             "deaths":     0,
             "lineage":    {},
+            "predator_kills": 0,
         }
         e_save(path, state)
     return state
 
 def e_save_state(state):
     e_save(f"{E_DATA_DIR}/state.json", state)
+
+
+# ── Predator ───────────────────────────────────────────────────
+
+def init_predator():
+    """
+    Single adaptive predator. Hunts by detecting prey field emissions.
+    Starts with moderate sensitivity and speed.
+    Adapts over time — gets better at what works.
+    """
+    return {
+        "position":    50.0,           # starts in the middle
+        "sensitivity": PREDATOR_SENSITIVITY,
+        "speed":       PREDATOR_SPEED,
+        "hunt_radius": PREDATOR_HUNT_RADIUS,
+        "attack_dist": PREDATOR_ATTACK_DIST,
+        "damage":      PREDATOR_DAMAGE,
+        "mutation_rate": PREDATOR_MUT_RATE,
+        "kills":       0,
+        "cycles_hungry": 0,            # cycles without a kill
+        "last_kill_cycle": 0,
+        "age":         0,
+        "fitness":     0.5,
+    }
+
+
+def predator_field_detection(predator, entities):
+    """
+    Predator detects prey by sensing their field emissions.
+    Higher sensitivity = better detection at greater distance.
+    High-frequency prey are MORE detectable (stronger, directional signal)
+    unless prey has evolved to suppress amplitude.
+    Returns: (nearest_prey_id, distance, field_strength_detected)
+    """
+    best_id    = None
+    best_score = 0.0
+    best_dist  = float('inf')
+
+    for eid, entity in entities.items():
+        if not entity.get('alive', True):
+            continue
+        dist = abs(predator['position'] - entity['position'])
+        if dist > predator['hunt_radius']:
+            continue
+
+        # Field signal strength at this distance
+        # High frequency = stronger signal = easier to detect
+        freq_factor = 0.5 + entity.get('base_frequency', 0.7)
+        amp_factor  = entity.get('amplitude', 0.5)
+        signal      = amp_factor * freq_factor * math.exp(-FIELD_DECAY * dist)
+        score       = signal * predator['sensitivity']
+
+        if score > best_score:
+            best_score = score
+            best_id    = eid
+            best_dist  = dist
+
+    return best_id, best_dist, best_score
+
+
+def move_predator(predator, target_entity, all_entities):
+    """
+    Predator moves toward detected prey.
+    If no prey detected, random patrol.
+    """
+    target_id, dist, signal = predator_field_detection(predator, all_entities)
+
+    if target_id and dist > 0:
+        # Move toward target
+        target_pos  = all_entities[target_id]['position']
+        direction   = 1.0 if target_pos > predator['position'] else -1.0
+        move_amount = min(predator['speed'], dist)
+        new_pos     = predator['position'] + direction * move_amount
+        predator['position'] = max(0.0, min(float(WORLD_SIZE - 1), new_pos))
+        return target_id
+    else:
+        # Random patrol when no prey detected
+        predator['position'] += random.gauss(0, predator['speed'] * 0.5)
+        predator['position'] = max(0.0, min(float(WORLD_SIZE - 1), predator['position'])) 
+        return None
+
+
+def mutate_predator(predator, recent_success):
+    """
+    Predator adapts based on hunting success.
+    Hungry predator mutates more aggressively.
+    Successful predator refines what works.
+    """
+    p = dict(predator)
+    hunger   = predator.get('cycles_hungry', 0)
+    mut_rate = predator['mutation_rate'] * (1.0 + hunger * 0.02)
+    mut_rate = min(0.4, mut_rate)
+    changes  = []
+
+    if recent_success:
+        # Reinforce successful traits — smaller mutations
+        if random.random() < mut_rate * 0.5:
+            d = random.gauss(0, 0.02)
+            p['sensitivity'] = max(0.1, min(2.0, p['sensitivity'] + d))
+            changes.append(f"sens->{p['sensitivity']:.3f}")
+        if random.random() < mut_rate * 0.3:
+            d = random.gauss(0, 0.1)
+            p['hunt_radius'] = max(3.0, min(20.0, p['hunt_radius'] + d))
+            changes.append(f"radius->{p['hunt_radius']:.2f}")
+    else:
+        # Hungry — try bigger changes
+        if random.random() < mut_rate:
+            d = random.gauss(0, 0.05)
+            p['sensitivity'] = max(0.1, min(2.0, p['sensitivity'] + d))
+            changes.append(f"sens->{p['sensitivity']:.3f}")
+        if random.random() < mut_rate:
+            d = random.gauss(0, 0.3)
+            p['speed'] = max(1.0, min(10.0, p['speed'] + d))
+            changes.append(f"speed->{p['speed']:.2f}")
+        if random.random() < mut_rate * 0.5:
+            d = random.gauss(0, 0.5)
+            p['hunt_radius'] = max(3.0, min(25.0, p['hunt_radius'] + d))
+            changes.append(f"radius->{p['hunt_radius']:.2f}")
+        if random.random() < mut_rate * 0.3:
+            d = random.gauss(0, 1.0)
+            p['damage'] = max(5.0, min(30.0, p['damage'] + d))
+            changes.append(f"damage->{p['damage']:.1f}")
+
+    return p, changes
+
+
+def prey_evasion_pressure(entity, predator, all_entities):
+    """
+    Detect predator field and apply evasion pressure to movement.
+    The predator has its own field signature — entities that evolve
+    sensitivity to it can detect and flee before being caught.
+    Predator field: low amplitude, medium-low frequency (stealthy hunter)
+    Returns: evasion_direction (-1, 0, 1), threat_level (0-1)
+    """
+    pred_pos  = predator.get('position', 50.0)
+    distance  = abs(entity['position'] - pred_pos)
+
+    # Predator emits a weak field that sensitive prey can detect
+    # Predator sensitivity adaptation makes it harder to detect over time
+    # (predator evolves to suppress its own field — stealth)
+    pred_field_strength = 0.3 / (1.0 + predator.get('sensitivity', 0.6) * 0.5)
+    detected_signal = pred_field_strength * math.exp(-FIELD_DECAY * distance)
+
+    # Entity's sensitivity determines if it can detect the predator
+    entity_sensitivity = entity.get('sensitivity', 0.5)
+    detection_threshold = 0.05 / max(entity_sensitivity, 0.1)
+
+    if detected_signal > detection_threshold and distance < predator.get('hunt_radius', 8) * 1.5:
+        # Flee away from predator
+        threat = min(1.0, detected_signal / detection_threshold)
+        direction = -1.0 if pred_pos > entity['position'] else 1.0
+        return direction, threat
+    return 0.0, 0.0
 
 
 # ── Core Cycle ─────────────────────────────────────────────────
@@ -2021,6 +2187,42 @@ def run_eco_cycle(state):
     for pos in food:
         food[pos] = min(FOOD_MAX, food[pos] + FOOD_REGEN)
 
+    # ── Predator acts ─────────────────────────────────────────
+    predator = state.get("predator", init_predator())
+    predator["age"] += 1
+    recent_kill = (cycle - predator.get("last_kill_cycle", 0)) < 10
+
+    # Predator moves and attacks
+    target_id = move_predator(predator, None, alive)
+    kill_this_cycle = False
+
+    for eid, entity in list(alive.items()):
+        dist = abs(predator["position"] - entity["position"])
+        if dist <= predator["attack_dist"]:
+            # Attack — drain energy
+            damage = predator["damage"]
+            alive[eid]["energy"] -= damage
+            if alive[eid]["energy"] <= 0:
+                alive[eid]["alive"] = False
+                predator["kills"] += 1
+                predator["last_kill_cycle"] = cycle
+                predator["cycles_hungry"] = 0
+                state["predator_kills"] = state.get("predator_kills", 0) + 1
+                kill_this_cycle = True
+                moments.append({
+                    "cycle": cycle, "type": "predation",
+                    "entity": eid, "predator_pos": round(predator["position"], 1),
+                    "generation": entity.get("generation", 0),
+                })
+                logging.info(f"[ECO] Cycle {cycle} — PREDATION: {eid} killed (gen={entity.get('generation',0)})")
+
+    if not kill_this_cycle:
+        predator["cycles_hungry"] = predator.get("cycles_hungry", 0) + 1
+
+    # Predator adapts
+    predator, pred_changes = mutate_predator(predator, recent_kill)
+    state["predator"] = predator
+
     # ── Each entity acts ──────────────────────────────────────
     new_entities = {}
     for eid, entity in alive.items():
@@ -2035,8 +2237,11 @@ def run_eco_cycle(state):
         # Mutate slightly each cycle
         entity, changes = mutate_entity(entity)
 
-        # Move
-        new_pos, dist_moved = decide_movement(entity, food, alive, perceived)
+        # Move — with predator evasion pressure
+        evasion_dir, threat = prey_evasion_pressure(entity, predator, alive)
+        new_pos, dist_moved = decide_movement(entity, food, alive, perceived,
+                                               evasion_dir=evasion_dir,
+                                               threat_level=threat)
         entity["position"]  = new_pos
 
         # Consume food
@@ -2351,14 +2556,28 @@ def e_world():
         pos = int(e.get("position", 0))
         if 0 <= pos < WORLD_SIZE:
             world[pos] = eid[0].upper()
+    # Show predator as X
+    predator = state.get("predator", {})
+    pred_pos = int(predator.get("position", 50))
+    if 0 <= pred_pos < WORLD_SIZE:
+        world[pred_pos] = "X"
 
     return jsonify({
-        "cycle":   state.get("cycle"),
-        "world":   "".join(world),
-        "key":     "F=food(high) f=food(low) A/B/G=founders uppercase=gen0 others=offspring",
-        "legend":  {eid: {"pos": int(e["position"]), "energy": round(e["energy"],1),
-                          "freq": round(e["base_frequency"],3), "gen": e["generation"]}
-                    for eid, e in entities.items()},
+        "cycle":     state.get("cycle"),
+        "world":     "".join(world),
+        "key":       "F=food(high) f=food(low) X=predator entities=first letter of ID",
+        "legend":    {eid: {"pos": int(e["position"]), "energy": round(e["energy"],1),
+                            "freq": round(e["base_frequency"],3), "gen": e["generation"]}
+                      for eid, e in entities.items()},
+        "predator":  {
+            "position":    round(predator.get("position", 50), 1),
+            "sensitivity": round(predator.get("sensitivity", 0.6), 3),
+            "speed":       round(predator.get("speed", 4.0), 2),
+            "hunt_radius": round(predator.get("hunt_radius", 8.0), 1),
+            "kills":       predator.get("kills", 0),
+            "age":         predator.get("age", 0),
+            "cycles_hungry": predator.get("cycles_hungry", 0),
+        },
     })
 
 @app.route("/triad2/moments")
@@ -2410,11 +2629,13 @@ def e_start():
             "started":    datetime.now(timezone.utc).isoformat(),
             "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
             "food":       food,
+            "predator":   init_predator(),
             "generation": 0,
             "next_id":    4,
             "births":     0,
             "deaths":     0,
             "lineage":    {},
+            "predator_kills": 0,
         }
         e_save_state(fresh)
         run_ecosystem()
