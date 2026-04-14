@@ -169,5 +169,41 @@ All under Kai-C-Clarke:
 
 ---
 
+---
+
+## PROJECT LINEAGE — GENESIS EXPERIMENTS (9 October 2025)
+
+Two parallel Genesis experiments run by Jon Stiles with Kai (GPT-4) and Grok alternating cycles.
+
+### Genesis Run 1 — Ecology (Kai + Claude, 9 cycles)
+Predator-prey ecosystem evolving through AI-to-AI code mutation.
+- Cycle 1: Two creatures, random movement, energy depletion
+- Cycle 3: First intelligence — herbivore seeks food, carnivore seeks prey
+- Cycle 5: Herbivore learns to flee — adversarial dynamics emerge
+- Cycle 9: Full ecosystem — reproduction, old age, extinction events
+**Key insight:** Neither AI designed the final result. Each only saw the previous cycle.
+
+### Genesis Run 2 — Curiosity Engines (Kai + Grok, 9 cycles)
+Agents with Bayesian belief cells, information gain as curiosity drive, wonder accumulating from surprise.
+- Cycle 1: Beta-distribution beliefs, expected information gain, wonder from surprise
+- Cycle 2: Gossip — agents share beliefs when proximate. First inter-agent communication.
+- Cycle 3: Multi-agent question logging. Agents ask questions when surprised or uncertain.
+- Cycle 5: Logistic hypothesis added — local vs global model disagreement triggers questions
+- Cycle 6: Evolving world — environment changes, sustaining curiosity indefinitely
+- Cycle 9: **Seasonal cycles. Adaptive learning rates. META-QUESTIONS.**
+  "Clustered anomalies detected across regions — coordinated exploration needed?"
+  The system became curious about its own curiosity patterns. Unprompted.
+
+**The direct ancestors of:**
+- Consilium Enquiring Mind (agent asking questions from observing the world)
+- The Substrate (AST mutation toward self-inquiry)
+- The Ecosystem language corpus (logging field patterns vs outcomes)
+
+**The trajectory:**
+Oct 2025: Can AI-to-AI evolution produce something designers didn't specify? → YES
+Apr 2026: Can it produce something that notices its own existence? → Running now.
+
+---
+
 *Push updates to this file at the end of each session.*
 *This is the single source of truth for project state.*
