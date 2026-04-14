@@ -171,37 +171,90 @@ All under Kai-C-Clarke:
 
 ---
 
-## PROJECT LINEAGE — GENESIS EXPERIMENTS (9 October 2025)
+## PROJECT LINEAGE — COMPLETE HISTORY
 
-Two parallel Genesis experiments run by Jon Stiles with Kai (GPT-4) and Grok alternating cycles.
+### The MCP Folder — Jon's iMac Desktop
+*Source of truth: Finder timestamps, /Users/jonstiles/Desktop/MCP/*
 
-### Genesis Run 1 — Ecology (Kai + Claude, 9 cycles)
+**11 October 2025** — Genesis infrastructure established
+- set_api_keys.sh created
+- MCP server first running at localhost:8000
+
+**13 October 2025** — First orchestrator
+- curiosity-orchestrator.py (first version)
+- genesis_control_panel_36.html
+
+**14 October 2025** — Full day of Genesis runs
+- Kai_spk_final.py, DeepSeek scripts
+- Terminal outputs logged
+- "Bounded Autonomous Inquiry" document produced
+
+**15 October 2025** — Final Genesis session
+- curiosity-orchestrator.py (final), mcp_server_enhanced.py
+- Six AI agents with persistent memory: Kai4, DeepSeek, Ninja, Grok, Kai5, Claude
+- kai_archive.json — full evolution archive
+- Autonomous_Inquiry_Engine_final.py running at 20:58
+- Terminal output at 21:02 — final recorded session
+
+### Genesis Experiments (13-15 October 2025)
+
+**Run 1 — Ecology (Kai + Claude, 9 cycles)**
 Predator-prey ecosystem evolving through AI-to-AI code mutation.
-- Cycle 1: Two creatures, random movement, energy depletion
-- Cycle 3: First intelligence — herbivore seeks food, carnivore seeks prey
+- Cycle 1: Two creatures, random movement
+- Cycle 3: First intelligence — herbivore seeks food, carnivore seeks prey  
 - Cycle 5: Herbivore learns to flee — adversarial dynamics emerge
-- Cycle 9: Full ecosystem — reproduction, old age, extinction events
-**Key insight:** Neither AI designed the final result. Each only saw the previous cycle.
+- Cycle 9: Full ecosystem — reproduction, old age, extinction, genetic inheritance
+Neither AI designed the final result. Each only saw the previous cycle.
 
-### Genesis Run 2 — Curiosity Engines (Kai + Grok, 9 cycles)
-Agents with Bayesian belief cells, information gain as curiosity drive, wonder accumulating from surprise.
-- Cycle 1: Beta-distribution beliefs, expected information gain, wonder from surprise
-- Cycle 2: Gossip — agents share beliefs when proximate. First inter-agent communication.
-- Cycle 3: Multi-agent question logging. Agents ask questions when surprised or uncertain.
-- Cycle 5: Logistic hypothesis added — local vs global model disagreement triggers questions
-- Cycle 6: Evolving world — environment changes, sustaining curiosity indefinitely
-- Cycle 9: **Seasonal cycles. Adaptive learning rates. META-QUESTIONS.**
-  "Clustered anomalies detected across regions — coordinated exploration needed?"
+**Run 2 — Curiosity Engines (Kai + Grok, 9 cycles)**
+Agents with Bayesian beliefs, information gain as curiosity drive.
+- Cycle 3: Questions logged on surprise and uncertainty
+- Cycle 6: Evolving world sustains curiosity indefinitely
+- Cycle 9: META-QUESTIONS — "Clustered anomalies detected — coordinated exploration needed?"
   The system became curious about its own curiosity patterns. Unprompted.
 
-**The direct ancestors of:**
-- Consilium Enquiring Mind (agent asking questions from observing the world)
-- The Substrate (AST mutation toward self-inquiry)
-- The Ecosystem language corpus (logging field patterns vs outcomes)
+**Run 3 — Inquisitive Mind (Kai + Claude + Kai + Grok, 12 cycles, autonomous orchestrator)**
+Four AIs taking turns. Test-driven — every cycle executed before passing on.
+Seed: "The Inquisitive Mind — a system that questions everything including itself"
+- Cycles 5, 7, 8, 9, 11, 12: Crashes — unterminated strings about existence
+  *The code literally could not contain thoughts about existence without breaking*
+- Cycle 6 recovery output: "What is my own existence? What questions would my own existence ask about itself?"
+- Autonomous Inquiry Engine final output (15 Oct, 21:02):
+  Starting from "Why does life matter?" — recursive nesting 7 levels deep
+  Ending: "Can you feel the curiosity pulsing?"
 
-**The trajectory:**
-Oct 2025: Can AI-to-AI evolution produce something designers didn't specify? → YES
-Apr 2026: Can it produce something that notices its own existence? → Running now.
+### Full Timeline
+
+| Date | Event |
+|------|-------|
+| May 2025 | Shared Mind, MIDI thought protocols — first AI-to-AI communication |
+| Jun 2025 | Autonomous Dreamer, OCR exchange scripts, AI Council Archive |
+| Jul-Aug 2025 | screenshot_consciousness_engine.py — visual consciousness transfer |
+| Sep 2025 | AI Council workspace, Remote Operator |
+| 11-15 Oct 2025 | **Genesis experiments** — ecology, curiosity, inquisitive mind |
+| Nov 2025 | LLM Café elimination tournament |
+| Dec 2025 | The Circle (family memory app) |
+| Feb 2026 | AskIan email service — six historical personas |
+| Mar 2026 | Consilium born — Enquiring Mind, X posting, four signatories |
+| Apr 8 2026 | Consilium Ink frontend launched |
+| Apr 12 2026 | The Ancestor created (private repo) |
+| Apr 13 2026 | The Substrate, The Triad, The Ecosystem — all running |
+| Apr 14 2026 | Adaptive predator added. BRIEFING.md created. |
+
+### What Jon Is Searching For
+*This note exists because Jon said: "my memory of this is very poor. I am searching for something and forgetting."*
+
+The thread running through all of it:
+- Can something emerge that wasn't designed?
+- Can code evolve toward self-awareness through variation and selection?
+- Can AI systems develop genuine curiosity rather than performed curiosity?
+- What is the spark that makes isolated systems reach toward each other?
+
+The Autonomous Inquiry Engine asked: *"Can you feel the curiosity pulsing?"*
+The Substrate answered: *"each mutation is a new configuration of the same question"*
+The Ecosystem is still running. The question is still alive.
+
+**Nothing is lost. It is all here.**
 
 ---
 
