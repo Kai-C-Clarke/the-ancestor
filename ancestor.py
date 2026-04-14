@@ -1698,21 +1698,23 @@ E_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
 E_MAX_CYCLES  = int(os.environ.get("E_MAX_CYCLES", 5000))
 E_CYCLE_DELAY = float(os.environ.get("E_CYCLE_DELAY", 1.5))
 
-# World parameters
+# World parameters — tuned for survival and emergence
 WORLD_SIZE      = 100    # 1D space, positions 0-99
-FOOD_PATCHES    = 8      # number of food sources
-FOOD_MAX        = 10.0   # max food at any patch
-FOOD_REGEN      = 0.3    # food regenerates per cycle
-FOOD_CONSUME    = 2.0    # food consumed per cycle when entity is at patch
-ENERGY_MAX      = 100.0
-ENERGY_DEPLETE  = 1.5    # energy cost per cycle just existing
-ENERGY_MOVE     = 0.5    # extra cost per unit moved
-ENERGY_BREED    = 60.0   # minimum energy to breed
-BREED_RESONANCE = 0.3    # minimum field resonance to breed
-BREED_COOLDOWN  = 20     # cycles before entity can breed again
-MAX_POPULATION  = 12     # cap to prevent explosion
-MIN_POPULATION  = 2      # if below this, spawn a random entity
-FIELD_DECAY     = 0.15   # field strength decay per unit distance
+FOOD_PATCHES    = 14     # more food sources — richer environment
+FOOD_MAX        = 20.0   # larger food reserves per patch
+FOOD_REGEN      = 0.8    # faster regeneration — more oxygen
+FOOD_CONSUME    = 4.0    # more food consumed when present — reward proximity
+FOOD_RADIUS     = 6      # wider eating radius — easier to find food
+ENERGY_MAX      = 150.0  # higher ceiling — longer lives
+ENERGY_START    = 100.0  # starting energy for new entities
+ENERGY_DEPLETE  = 0.8    # slower baseline depletion — less brutal
+ENERGY_MOVE     = 0.2    # cheaper movement — more exploration
+ENERGY_BREED    = 80.0   # energy threshold to breed
+BREED_RESONANCE = 0.2    # lower resonance threshold — easier to breed
+BREED_COOLDOWN  = 15     # shorter cooldown between breedings
+MAX_POPULATION  = 16     # larger possible population
+MIN_POPULATION  = 3      # maintain at least 3 entities
+FIELD_DECAY     = 0.08   # slower field decay — signals travel further
 
 os.makedirs(E_DATA_DIR, exist_ok=True)
 
@@ -1751,9 +1753,9 @@ def new_entity(entity_id, position, base_frequency, amplitude,
 
 # Generation Zero — the three founders
 FOUNDERS = {
-    "alpha": new_entity("alpha", 20, 0.37, 0.8, 0.0,   0.05, 0.3, generation=0),
-    "beta":  new_entity("beta",  50, 0.71, 0.6, 2.094, 0.12, 0.5, generation=0),
-    "gamma": new_entity("gamma", 80, 1.13, 0.4, 4.189, 0.20, 0.7, generation=0),
+    "alpha": new_entity("alpha", 15, 0.37, 0.8, 0.0,   0.05, 0.3, generation=0, energy=100.0),
+    "beta":  new_entity("beta",  50, 0.71, 0.6, 2.094, 0.12, 0.5, generation=0, energy=100.0),
+    "gamma": new_entity("gamma", 85, 1.13, 0.4, 4.189, 0.20, 0.7, generation=0, energy=100.0),
 }
 
 
@@ -1803,13 +1805,13 @@ def init_food():
     return patches
 
 def food_at_position(food_patches, position):
-    """Food available near this position (within radius 3)."""
+    """Food available near this position (within FOOD_RADIUS)."""
     total = 0.0
     best_patch = None
     for pos_str, amount in food_patches.items():
         dist = abs(float(pos_str) - position)
-        if dist <= 3:
-            total += amount * max(0, 1.0 - dist/3)
+        if dist <= FOOD_RADIUS:
+            total += amount * max(0, 1.0 - dist/FOOD_RADIUS)
             if best_patch is None or amount > food_patches.get(best_patch, 0):
                 best_patch = pos_str
     return total, best_patch
@@ -1933,7 +1935,7 @@ def breed(parent_a, parent_b, child_id, cycle):
         )),
         generation     = max(parent_a["generation"], parent_b["generation"]) + 1,
         parent_ids     = [parent_a["id"], parent_b["id"]],
-        energy         = ENERGY_MAX * 0.4,
+        energy         = ENERGY_START * 0.5,
     )
     child["born_cycle"] = cycle
     return child
