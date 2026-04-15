@@ -4171,7 +4171,10 @@ def run_field_cycle(state):
 
     for pid, pred in preds.items():
         pred["age"]    += 1
-        pred["energy"] -= PRED_DEPLETE
+        # Mode-dependent energy cost — hunt is expensive, search is cheap
+        # This forces strategic switching: don't hunt until confident
+        mode_cost = PRED_DEPLETE * 4.0 if pred["mode"] == "hunt" else PRED_DEPLETE * 0.4
+        pred["energy"] -= mode_cost
 
         if pred["energy"] <= 0 or pred["age"] >= PRED_MAX_AGE:
             pred["energy"] = PRED_ENERGY_START * 0.6
