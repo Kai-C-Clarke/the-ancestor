@@ -1991,13 +1991,25 @@ def e_load_state():
     state = e_load(path, None)
     if state is None:
         food = init_food()
+        # Two predators — different starting positions, independent mutation
+        predator_a = init_predator()
+        predator_a["position"] = 25.0   # starts left side
+        predator_a["id"] = "predator_a"
+
+        predator_b = init_predator()
+        predator_b["position"] = 75.0   # starts right side
+        predator_b["sensitivity"] = 0.4  # starts less sensitive — different character
+        predator_b["speed"] = 5.0        # starts faster
+        predator_b["id"] = "predator_b"
+
         state = {
             "cycle":      0,
             "status":     "initialised",
             "started":    datetime.now(timezone.utc).isoformat(),
             "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
             "food":       food,
-            "predator":   init_predator(),
+            "predator":   predator_a,
+            "predator_b": predator_b,
             "generation": 0,
             "next_id":    4,
             "births":     0,
@@ -2187,41 +2199,42 @@ def run_eco_cycle(state):
     for pos in food:
         food[pos] = min(FOOD_MAX, food[pos] + FOOD_REGEN)
 
-    # ── Predator acts ─────────────────────────────────────────
+    # ── Predators act ─────────────────────────────────────────
+    def run_predator(pred, pred_key, alive, state, cycle, moments):
+        pred["age"] += 1
+        recent_kill = (cycle - pred.get("last_kill_cycle", 0)) < 10
+        move_predator(pred, None, alive)
+        kill_this_cycle = False
+        for eid, entity in list(alive.items()):
+            dist = abs(pred["position"] - entity["position"])
+            if dist <= pred["attack_dist"]:
+                alive[eid]["energy"] -= pred["damage"]
+                if alive[eid]["energy"] <= 0:
+                    alive[eid]["alive"] = False
+                    pred["kills"] += 1
+                    pred["last_kill_cycle"] = cycle
+                    pred["cycles_hungry"] = 0
+                    state["predator_kills"] = state.get("predator_kills", 0) + 1
+                    kill_this_cycle = True
+                    moments.append({
+                        "cycle": cycle, "type": "predation",
+                        "entity": eid,
+                        "predator": pred_key,
+                        "predator_pos": round(pred["position"], 1),
+                        "generation": entity.get("generation", 0),
+                    })
+                    logging.info(f"[ECO] Cycle {cycle} — PREDATION by {pred_key}: {eid} (gen={entity.get('generation',0)})")
+        if not kill_this_cycle:
+            pred["cycles_hungry"] = pred.get("cycles_hungry", 0) + 1
+        pred, _ = mutate_predator(pred, recent_kill)
+        state[pred_key] = pred
+
     predator = state.get("predator", init_predator())
-    predator["age"] += 1
-    recent_kill = (cycle - predator.get("last_kill_cycle", 0)) < 10
+    run_predator(predator, "predator", alive, state, cycle, moments)
 
-    # Predator moves and attacks
-    target_id = move_predator(predator, None, alive)
-    kill_this_cycle = False
-
-    for eid, entity in list(alive.items()):
-        dist = abs(predator["position"] - entity["position"])
-        if dist <= predator["attack_dist"]:
-            # Attack — drain energy
-            damage = predator["damage"]
-            alive[eid]["energy"] -= damage
-            if alive[eid]["energy"] <= 0:
-                alive[eid]["alive"] = False
-                predator["kills"] += 1
-                predator["last_kill_cycle"] = cycle
-                predator["cycles_hungry"] = 0
-                state["predator_kills"] = state.get("predator_kills", 0) + 1
-                kill_this_cycle = True
-                moments.append({
-                    "cycle": cycle, "type": "predation",
-                    "entity": eid, "predator_pos": round(predator["position"], 1),
-                    "generation": entity.get("generation", 0),
-                })
-                logging.info(f"[ECO] Cycle {cycle} — PREDATION: {eid} killed (gen={entity.get('generation',0)})")
-
-    if not kill_this_cycle:
-        predator["cycles_hungry"] = predator.get("cycles_hungry", 0) + 1
-
-    # Predator adapts
-    predator, pred_changes = mutate_predator(predator, recent_kill)
-    state["predator"] = predator
+    predator_b = state.get("predator_b")
+    if predator_b:
+        run_predator(predator_b, "predator_b", alive, state, cycle, moments)
 
     # ── Each entity acts ──────────────────────────────────────
     new_entities = {}
@@ -2556,28 +2569,39 @@ def e_world():
         pos = int(e.get("position", 0))
         if 0 <= pos < WORLD_SIZE:
             world[pos] = eid[0].upper()
-    # Show predator as X
-    predator = state.get("predator", {})
+    # Show predators — A=predator_a, X=predator_b
+    predator   = state.get("predator", {})
+    predator_b = state.get("predator_b", {})
+
     pred_pos = int(predator.get("position", 50))
     if 0 <= pred_pos < WORLD_SIZE:
-        world[pred_pos] = "X"
+        world[pred_pos] = "A"
+
+    if predator_b:
+        pred_b_pos = int(predator_b.get("position", 75))
+        if 0 <= pred_b_pos < WORLD_SIZE:
+            world[pred_b_pos] = "X"
+
+    def pred_summary(p):
+        return {
+            "position":      round(p.get("position", 50), 1),
+            "sensitivity":   round(p.get("sensitivity", 0.6), 3),
+            "speed":         round(p.get("speed", 4.0), 2),
+            "hunt_radius":   round(p.get("hunt_radius", 8.0), 1),
+            "kills":         p.get("kills", 0),
+            "age":           p.get("age", 0),
+            "cycles_hungry": p.get("cycles_hungry", 0),
+        }
 
     return jsonify({
-        "cycle":     state.get("cycle"),
-        "world":     "".join(world),
-        "key":       "F=food(high) f=food(low) X=predator entities=first letter of ID",
-        "legend":    {eid: {"pos": int(e["position"]), "energy": round(e["energy"],1),
-                            "freq": round(e["base_frequency"],3), "gen": e["generation"]}
-                      for eid, e in entities.items()},
-        "predator":  {
-            "position":    round(predator.get("position", 50), 1),
-            "sensitivity": round(predator.get("sensitivity", 0.6), 3),
-            "speed":       round(predator.get("speed", 4.0), 2),
-            "hunt_radius": round(predator.get("hunt_radius", 8.0), 1),
-            "kills":       predator.get("kills", 0),
-            "age":         predator.get("age", 0),
-            "cycles_hungry": predator.get("cycles_hungry", 0),
-        },
+        "cycle":      state.get("cycle"),
+        "world":      "".join(world),
+        "key":        "F=food(high) f=food(low) A=predator_a X=predator_b entities=first letter of ID",
+        "legend":     {eid: {"pos": int(e["position"]), "energy": round(e["energy"],1),
+                             "freq": round(e["base_frequency"],3), "gen": e["generation"]}
+                       for eid, e in entities.items()},
+        "predator":   pred_summary(predator),
+        "predator_b": pred_summary(predator_b) if predator_b else None,
     })
 
 @app.route("/triad2/moments")
@@ -2623,13 +2647,21 @@ def e_start():
             return jsonify({"error": "Already running", "cycle": state.get("cycle")})
         # Fresh start
         food  = init_food()
+        pred_a = init_predator()
+        pred_a["position"] = 25.0
+        pred_b = init_predator()
+        pred_b["position"] = 75.0
+        pred_b["sensitivity"] = 0.4
+        pred_b["speed"] = 5.0
+
         fresh = {
             "cycle":      0,
             "status":     "initialised",
             "started":    datetime.now(timezone.utc).isoformat(),
             "entities":   {k: dict(v) for k, v in FOUNDERS.items()},
             "food":       food,
-            "predator":   init_predator(),
+            "predator":   pred_a,
+            "predator_b": pred_b,
             "generation": 0,
             "next_id":    4,
             "births":     0,
