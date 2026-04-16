@@ -2705,6 +2705,14 @@ def e_reset():
 # ── Constants ──────────────────────────────────────────────────
 
 F2_DATA_DIR    = "/mnt/data/field"
+# Fallback to /tmp if persistent disk not mounted
+try:
+    os.makedirs(F2_DATA_DIR, exist_ok=True)
+    open(f"{F2_DATA_DIR}/.write_test","w").close()
+    os.remove(f"{F2_DATA_DIR}/.write_test")
+except Exception:
+    F2_DATA_DIR = "/tmp/field_data"
+    os.makedirs(F2_DATA_DIR, exist_ok=True)
 F2_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
 F2_MAX_CYCLES  = int(os.environ.get("F_MAX_CYCLES", 10000))
 F2_CYCLE_DELAY = float(os.environ.get("F_CYCLE_DELAY", 1.0))
