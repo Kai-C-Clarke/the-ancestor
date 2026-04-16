@@ -3469,24 +3469,35 @@ def run_field_v2_cycle(state):
 
 def run_field_v2():
     def loop():
-        state = f2_load(f2_state_path(), None) or f2_init_state()
-        f2_save(f2_state_path(), state)
-        if state["cycle"] >= F2_MAX_CYCLES:
-            logging.info("[FIELD2] Already complete")
-            return
-        logging.info(f"[FIELD2] Starting from cycle {state['cycle']}")
-        while state["cycle"] < F2_MAX_CYCLES:
-            if os.environ.get("FIELD_ACTIVE","true").lower() == "false":
-                state["status"] = "halted"; f2_save(f2_state_path(), state); break
-            try:
-                run_field_v2_cycle(state)
-            except Exception as e:
-                logging.error(f"[FIELD2] Error cycle {state['cycle']}: {e}")
-                import traceback; traceback.print_exc()
-            time.sleep(F2_CYCLE_DELAY)
-        if state["cycle"] >= F2_MAX_CYCLES:
-            state["status"] = "complete"; f2_save(f2_state_path(), state)
-    Thread(target=loop, daemon=True).start()
+        try:
+            logging.info("[FIELD2] Thread started")
+            state = f2_load(f2_state_path(), None) or f2_init_state()
+            f2_save(f2_state_path(), state)
+            logging.info(f"[FIELD2] State loaded: cycle={state['cycle']} status={state['status']}")
+            if state["cycle"] >= F2_MAX_CYCLES:
+                logging.info("[FIELD2] Already complete")
+                return
+            state["status"] = "running"
+            f2_save(f2_state_path(), state)
+            logging.info(f"[FIELD2] Starting loop from cycle {state['cycle']}")
+            while state["cycle"] < F2_MAX_CYCLES:
+                if os.environ.get("FIELD_ACTIVE","true").lower() == "false":
+                    state["status"] = "halted"; f2_save(f2_state_path(), state); break
+                try:
+                    run_field_v2_cycle(state)
+                except Exception as e:
+                    logging.error(f"[FIELD2] Cycle error at {state['cycle']}: {e}")
+                    import traceback; traceback.print_exc()
+                    time.sleep(5)
+                time.sleep(F2_CYCLE_DELAY)
+            if state["cycle"] >= F2_MAX_CYCLES:
+                state["status"] = "complete"; f2_save(f2_state_path(), state)
+        except Exception as e:
+            logging.error(f"[FIELD2] Loop crashed: {e}")
+            import traceback; traceback.print_exc()
+    t = Thread(target=loop, daemon=True)
+    t.start()
+    logging.info(f"[FIELD2] Thread launched: {t.ident}")
 
 
 # ── Language Analysis ──────────────────────────────────────────
