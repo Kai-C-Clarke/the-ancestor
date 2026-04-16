@@ -2694,479 +2694,479 @@ def e_reset():
 
 
 # ══════════════════════════════════════════════════════════════
-# THE FIELD — Spherical Ecosystem
-# S² surface. Two prey types. Periodic food pulses.
-# Low frequency for long range sensing. High frequency for hunt.
-# Predator mode-switch as proto-signal. /field/* routes.
+
+# ══════════════════════════════════════════════════════════════
+# THE FIELD v2 — Spherical Ecosystem
+# Moving zooplankton-style blooms. Spatial bucketing O(N*k).
+# Trajectory memory. Memory-weighted predator signals.
+# /field/* routes.
 # ══════════════════════════════════════════════════════════════
 
-# ── Config ─────────────────────────────────────────────────────
-F_DATA_DIR    = "/mnt/data/field"
-F_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
-F_MAX_CYCLES  = int(os.environ.get("F_MAX_CYCLES", 10000))
-F_CYCLE_DELAY = float(os.environ.get("F_CYCLE_DELAY", 1.0))
+# ── Constants ──────────────────────────────────────────────────
 
-# World
-SPHERE_RADIUS     = 1.0
-N_FOOD_SOURCES    = 6       # simultaneous food pulse sources
-PULSE_SPEED       = 0.05    # radians per cycle — how fast pulse expands
-PULSE_DURATION    = 40      # cycles before pulse fades
-PULSE_INTERVAL    = 60      # cycles between new pulses
-FOOD_INTENSITY    = 15.0    # energy available at pulse front
-FOOD_WIDTH        = 0.15    # angular width of pulse ring (radians)
+F2_DATA_DIR    = "/mnt/data/field"
+F2_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
+F2_MAX_CYCLES  = int(os.environ.get("F_MAX_CYCLES", 10000))
+F2_CYCLE_DELAY = float(os.environ.get("F_CYCLE_DELAY", 1.0))
 
-# Entities
-# Fish-strategy metabolism — broadcast spawning, many offspring, fast cycle
-GRAZER_ENERGY_START  = 30.0   # born small, must find food fast
-GRAZER_ENERGY_MAX    = 80.0
-GRAZER_DEPLETE       = 0.3    # lower base cost — they're small
-GRAZER_MOVE_COST     = 0.2
-GRAZER_BREED_THRESH  = 45.0   # low threshold — breed often
-GRAZER_BREED_COOL    = 5      # short cooldown — fast generations
-GRAZER_MAX_AGE       = 40     # short lives, high turnover
-GRAZER_FOOD_GAIN     = 10.0
+# Spatial grid
+LAT_BANDS      = 16          # latitude divisions
+# longitude sectors vary by latitude band (more near equator)
+
+# Blooms — drifting zooplankton
+N_BLOOMS           = 4       # simultaneous blooms
+BLOOM_SPEED        = 0.018   # radians/cycle — fast enough to force chase
+BLOOM_DRIFT        = 0.003   # random direction change per cycle
+BLOOM_RADIUS       = 0.10    # angular radius of bloom
+BLOOM_ENERGY_MAX   = 40.0    # energy per entity per cycle inside bloom
+BLOOM_LIFETIME     = 400     # cycles before bloom fades
+BLOOM_SPAWN_INT    = 80      # cycles between new bloom spawns
+
+# Grazers — fish strategy
+GRAZER_ENERGY_START  = 30.0
+GRAZER_ENERGY_MAX    = 90.0
+GRAZER_DEPLETE       = 0.25
+GRAZER_MOVE_COST     = 0.15
+GRAZER_BREED_THRESH  = 50.0
+GRAZER_BREED_COOL    = 4
+GRAZER_MAX_AGE       = 50
+GRAZER_FOOD_GAIN     = 15.0
+GRAZER_SPAWN_COUNT   = 10    # broadcast spawn
 GRAZER_BASE_FREQ     = 0.3
-GRAZER_SPAWN_COUNT   = 8      # broadcast spawning — 8 offspring at once
+MAX_GRAZERS          = 3000  # schooling threshold
+MIN_GRAZERS          = 20
 
-BROWSER_ENERGY_START = 60.0
-BROWSER_ENERGY_MAX   = 150.0
-BROWSER_DEPLETE      = 0.7
-BROWSER_MOVE_COST    = 0.4
-BROWSER_BREED_THRESH = 90.0
-BROWSER_BREED_COOL   = 10
-BROWSER_MAX_AGE      = 80
-BROWSER_FOOD_GAIN    = 18.0
+# Browsers
+BROWSER_ENERGY_START = 70.0
+BROWSER_ENERGY_MAX   = 160.0
+BROWSER_DEPLETE      = 0.6
+BROWSER_MOVE_COST    = 0.3
+BROWSER_BREED_THRESH = 100.0
+BROWSER_BREED_COOL   = 12
+BROWSER_MAX_AGE      = 100
+BROWSER_FOOD_GAIN    = 25.0
+BROWSER_SPAWN_COUNT  = 4
 BROWSER_BASE_FREQ    = 0.6
-BROWSER_SPAWN_COUNT  = 4      # fewer offspring than grazers
-
-MAX_GRAZERS    = 200   # much larger carrying capacity
-MAX_BROWSERS   = 40
-MIN_GRAZERS    = 10
-MIN_BROWSERS   = 4
+MAX_BROWSERS         = 150
+MIN_BROWSERS         = 5
 
 # Predators
-PRED_SEARCH_FREQ  = 0.15    # low freq for long range scan
-PRED_HUNT_FREQ    = 1.8     # high freq for close range precision
-PRED_SWITCH_DIST  = 0.3     # angular distance to switch from search to hunt
-PRED_DAMAGE       = 15.0
-PRED_SPEED_SEARCH = 0.04    # radians per cycle in search mode
-PRED_SPEED_HUNT   = 0.08    # faster in hunt mode
-PRED_ENERGY_START = 150.0
-PRED_DEPLETE      = 1.2
-PRED_MAX_AGE      = 200
+PRED_SEARCH_FREQ     = 0.12
+PRED_HUNT_FREQ       = 2.0
+PRED_SWITCH_DIST     = 0.25   # switch to hunt when prey this close
+PRED_DAMAGE          = 20.0
+PRED_SPEED_SEARCH    = 0.035
+PRED_SPEED_HUNT      = 0.085
+PRED_ENERGY_START    = 200.0
+PRED_DEPLETE_SEARCH  = 0.4    # cheap search
+PRED_DEPLETE_HUNT    = 1.8    # expensive hunt
+PRED_MAX_AGE         = 300
+PRED_MEMORY_LEN      = 50     # cycles of bloom trajectory to remember
 
-# Field decay — frequency dependent
-def field_decay_rate(frequency):
-    """Higher frequency = faster decay. Low freq travels far."""
-    return 0.05 + frequency * 0.4
-
-os.makedirs(F_DATA_DIR, exist_ok=True)
+os.makedirs(F2_DATA_DIR, exist_ok=True)
 
 
 # ── Sphere Mathematics ─────────────────────────────────────────
 
-def random_point_on_sphere():
-    """Uniform random point on unit sphere."""
-    theta = random.uniform(0, 2 * math.pi)
+def random_point():
+    theta = random.uniform(0, 2*math.pi)
     phi   = math.acos(random.uniform(-1, 1))
-    return sphere_to_xyz(theta, phi)
+    return sph2xyz(theta, phi)
 
-def sphere_to_xyz(theta, phi):
-    """Spherical coords to unit vector."""
-    return (
-        math.sin(phi) * math.cos(theta),
-        math.sin(phi) * math.sin(theta),
-        math.cos(phi)
-    )
+def sph2xyz(theta, phi):
+    sp = math.sin(phi)
+    return (sp*math.cos(theta), sp*math.sin(theta), math.cos(phi))
 
-def xyz_to_sphere(x, y, z):
-    """Unit vector to (theta, phi)."""
-    r   = math.sqrt(x*x + y*y + z*z)
-    if r == 0: return 0.0, 0.0
-    x, y, z = x/r, y/r, z/r
+def xyz2sph(x, y, z):
+    r = math.sqrt(x*x+y*y+z*z)
+    if r < 1e-10: return 0.0, 0.0
+    x,y,z = x/r, y/r, z/r
     phi   = math.acos(max(-1.0, min(1.0, z)))
-    theta = math.atan2(y, x) % (2 * math.pi)
+    theta = math.atan2(y,x) % (2*math.pi)
     return theta, phi
 
-def great_circle_distance(p1, p2):
-    """Angular distance between two unit vectors."""
-    dot = sum(a*b for a, b in zip(p1, p2))
-    dot = max(-1.0, min(1.0, dot))
-    return math.acos(dot)
+def norm(v):
+    m = math.sqrt(sum(x*x for x in v))
+    return v if m < 1e-10 else tuple(x/m for x in v)
 
-def normalise(v):
-    """Normalise vector to unit length."""
-    mag = math.sqrt(sum(x*x for x in v))
-    if mag == 0: return v
-    return tuple(x/mag for x in v)
+def gcd(p1, p2):
+    d = sum(a*b for a,b in zip(p1,p2))
+    return math.acos(max(-1.0, min(1.0, d)))
+
+def slerp(p, q, t):
+    omega = gcd(p, q)
+    if abs(math.sin(omega)) < 1e-10:
+        return norm(tuple((1-t)*a+t*b for a,b in zip(p,q)))
+    s0 = math.sin((1-t)*omega)/math.sin(omega)
+    s1 = math.sin(t*omega)/math.sin(omega)
+    return norm(tuple(s0*a+s1*b for a,b in zip(p,q)))
 
 def move_toward(pos, target, step):
-    """Move pos toward target by step radians along great circle."""
-    dist = great_circle_distance(pos, target)
+    dist = gcd(pos, target)
     if dist < 0.001: return pos
-    t = min(step / dist, 1.0)
-    # Spherical linear interpolation (slerp)
-    omega = dist
-    if abs(math.sin(omega)) < 1e-10:
-        return normalise(tuple(
-            (1-t)*a + t*b for a, b in zip(pos, target)
-        ))
-    s0 = math.sin((1-t)*omega) / math.sin(omega)
-    s1 = math.sin(t*omega)     / math.sin(omega)
-    result = tuple(s0*a + s1*b for a, b in zip(pos, target))
-    return normalise(result)
+    return slerp(pos, target, min(step/dist, 1.0))
 
 def move_away(pos, threat, step):
-    """Move pos away from threat by step radians."""
-    # Antipodal direction from threat
-    antipodal = tuple(-x for x in threat)
-    # Move toward antipodal but only step amount
-    return move_toward(pos, antipodal, step)
+    return move_toward(pos, norm(tuple(-x for x in threat)), step)
 
 def random_walk(pos, step):
-    """Random walk on sphere surface."""
-    # Random tangent direction
-    rand_pt = random_point_on_sphere()
-    return move_toward(pos, rand_pt, step)
+    return move_toward(pos, random_point(), step)
+
+def tangent_vector(pos):
+    """Random unit tangent vector at pos — for bloom drift."""
+    t = random_point()
+    # Remove component parallel to pos
+    dot = sum(a*b for a,b in zip(pos, t))
+    tang = tuple(a - dot*b for a,b in zip(t, pos))
+    return norm(tang) if any(abs(x) > 1e-10 for x in tang) else tangent_vector(pos)
+
+def apply_tangent_velocity(pos, vel, step):
+    """Move pos along tangent direction vel by step radians."""
+    target = norm(tuple(a + step*b for a,b in zip(pos, vel)))
+    return move_toward(pos, target, step)
 
 
-# ── Food Pulse System ──────────────────────────────────────────
+# ── Spatial Grid ───────────────────────────────────────────────
 
-def new_pulse():
+def cell_of(pos):
+    """Map unit vector to (band, sector) grid cell."""
+    theta, phi = xyz2sph(*pos)
+    band    = min(int(phi / math.pi * LAT_BANDS), LAT_BANDS - 1)
+    sectors = max(1, int(math.sin(max(phi, 0.01)) * LAT_BANDS * 2))
+    sector  = int(theta / (2*math.pi) * sectors) % sectors
+    return (band, sector, sectors)
+
+def neighbour_cells(cell):
+    """Return cell and its neighbours."""
+    band, sector, sectors = cell
+    neighbours = []
+    for db in [-1, 0, 1]:
+        b = band + db
+        if b < 0 or b >= LAT_BANDS: continue
+        s2 = max(1, int(math.sin(max(b/LAT_BANDS*math.pi, 0.01)) * LAT_BANDS * 2))
+        for ds in [-1, 0, 1]:
+            neighbours.append((b, (sector + ds) % s2, s2))
+    return neighbours
+
+def build_grid(entities):
+    """Build spatial index from alive entities. O(N)."""
+    grid = defaultdict(list)
+    for eid, e in entities.items():
+        if e.get("alive", True):
+            grid[cell_of(e["pos"])].append(eid)
+    return grid
+
+def nearby_entities(pos, grid, entities, radius=None):
+    """Return entity IDs near pos using spatial grid. O(k)."""
+    cell    = cell_of(pos)
+    nearby  = []
+    for nc in neighbour_cells(cell):
+        for eid in grid.get(nc, []):
+            nearby.append(eid)
+    return nearby
+
+
+# ── Blooms ─────────────────────────────────────────────────────
+
+def new_bloom():
+    pos = random_point()
     return {
-        "source":   random_point_on_sphere(),
-        "radius":   0.0,     # current angular radius of ring
+        "pos":      pos,
+        "vel":      tangent_vector(pos),   # drift direction
+        "energy":   BLOOM_ENERGY_MAX,
         "age":      0,
         "active":   True,
     }
 
-def pulse_food_at(pulse, pos):
-    """
-    How much food is available at pos from this pulse?
-    Food exists in a ring of width FOOD_WIDTH at the pulse's current radius.
-    """
-    if not pulse["active"]:
-        return 0.0
-    dist = great_circle_distance(pulse["source"], pos)
-    ring_dist = abs(dist - pulse["radius"])
-    if ring_dist > FOOD_WIDTH:
-        return 0.0
-    # Food intensity peaks at ring front, fades with age
-    intensity = FOOD_INTENSITY * (1.0 - ring_dist / FOOD_WIDTH)
-    age_factor = max(0.0, 1.0 - pulse["age"] / PULSE_DURATION)
-    return intensity * age_factor
+def update_blooms(blooms, cycle):
+    for b in blooms:
+        if not b["active"]: continue
+        b["age"] += 1
+        # Drift — move along current tangent with random perturbation
+        b["pos"] = apply_tangent_velocity(b["pos"], b["vel"], BLOOM_SPEED)
+        b["pos"] = norm(b["pos"])
+        # Random direction change
+        if random.random() < 0.1:
+            b["vel"] = norm(tuple(
+                a + random.gauss(0, BLOOM_DRIFT) * c
+                for a, c in zip(b["vel"], tangent_vector(b["pos"]))
+            ))
+        # Re-orthogonalise velocity to surface
+        dot = sum(a*b2 for a,b2 in zip(b["pos"], b["vel"]))
+        b["vel"] = norm(tuple(a - dot*c for a,c in zip(b["vel"], b["pos"])))
+        # Fade
+        if b["age"] >= BLOOM_LIFETIME:
+            b["active"] = False
 
-def update_pulses(pulses, cycle):
-    """Advance all pulses, retire old ones, spawn new ones."""
-    for p in pulses:
-        if p["active"]:
-            p["radius"] += PULSE_SPEED
-            p["age"]    += 1
-            if p["age"] >= PULSE_DURATION or p["radius"] >= math.pi:
-                p["active"] = False
+    # Spawn new blooms
+    active = sum(1 for b in blooms if b["active"])
+    if cycle % BLOOM_SPAWN_INT == 0 or active < 2:
+        blooms.append(new_bloom())
 
-    # Spawn new pulses periodically
-    active = sum(1 for p in pulses if p["active"])
-    if cycle % PULSE_INTERVAL == 0 or active < 2:
-        pulses.append(new_pulse())
+    blooms[:] = [b for b in blooms if b["active"]][-N_BLOOMS*3:]
+    return blooms
 
-    # Keep list manageable
-    pulses[:] = [p for p in pulses if p["active"]][-N_FOOD_SOURCES*2:]
-    return pulses
-
-def total_food_at(pulses, pos):
-    return sum(pulse_food_at(p, pos) for p in pulses)
-
-def food_gradient_direction(pulses, pos):
-    """Which direction has more food? Returns a point on sphere to move toward."""
-    best_pos  = None
-    best_food = 0.0
-    # Sample nearby points
-    for _ in range(8):
-        candidate = move_toward(pos, random_point_on_sphere(), 0.15)
-        food = total_food_at(pulses, candidate)
-        if food > best_food:
-            best_food = food
-            best_pos  = candidate
-    return best_pos
-
-
-# ── Field Perception ───────────────────────────────────────────
-
-def field_strength(emitter_pos, emitter_freq, emitter_amp, receiver_pos):
-    """
-    Field strength received at receiver_pos from emitter.
-    Low frequency: slow decay, travels far.
-    High frequency: fast decay, short range but precise.
-    """
-    dist  = great_circle_distance(emitter_pos, receiver_pos)
-    decay = field_decay_rate(emitter_freq)
-    return emitter_amp * math.exp(-decay * dist)
-
-def perceived_field(entity, all_entities, pulses):
-    """
-    Total field perceived by entity from all others.
-    Includes food pulse resonance (low frequency grazers resonate with pulse).
-    """
+def food_at(blooms, pos):
+    """Energy available from blooms at pos."""
     total = 0.0
-    for eid, other in all_entities.items():
-        if eid == entity["id"] or not other.get("alive", True): continue
-        freq = other.get("emit_freq", 0.5)
-        amp  = other.get("amplitude", 0.5)
-        total += field_strength(other["pos"], freq, amp, entity["pos"])
-
-    # Food pulse resonance — grazers feel the pulse as a field
-    if entity.get("type") == "grazer":
-        pulse_signal = total_food_at(pulses, entity["pos"]) * 0.1
-        total += pulse_signal
-
+    for b in blooms:
+        if not b["active"]: continue
+        dist = gcd(pos, b["pos"])
+        if dist < BLOOM_RADIUS:
+            intensity = 1.0 - dist/BLOOM_RADIUS
+            age_factor = max(0.0, 1.0 - b["age"]/BLOOM_LIFETIME)
+            total += BLOOM_ENERGY_MAX * intensity * age_factor * 0.15
     return total
+
+def nearest_bloom(blooms, pos):
+    """Find nearest active bloom and direction to it."""
+    best_dist = float('inf')
+    best_bloom = None
+    for b in blooms:
+        if not b["active"]: continue
+        dist = gcd(pos, b["pos"])
+        if dist < best_dist:
+            best_dist = dist
+            best_bloom = b
+    return best_bloom, best_dist
 
 
 # ── Entity Creation ────────────────────────────────────────────
 
-_entity_counter = [0]
+_eid = [0]
+def new_id(p):
+    _eid[0] += 1
+    return f"{p}{_eid[0]}"
 
-def new_id(prefix):
-    _entity_counter[0] += 1
-    return f"{prefix}_{_entity_counter[0]}"
-
-def new_grazer(pos=None, energy=None, generation=0, parent_ids=None, genes=None):
-    genes = genes or {}
+def new_grazer(pos=None, energy=None, gen=0, parent=None, genes=None):
+    g = genes or {}
     return {
-        "id":          new_id("g"),
-        "type":        "grazer",
-        "pos":         pos or random_point_on_sphere(),
-        "energy":      energy or GRAZER_ENERGY_START,
-        "age":         0,
-        "alive":       True,
-        "generation":  generation,
-        "parent_ids":  parent_ids or [],
-        "breed_cool":  0,
-        "births":      0,
-        "emit_freq":   genes.get("emit_freq", GRAZER_BASE_FREQ + random.gauss(0, 0.05)),
-        "amplitude":   genes.get("amplitude", 0.4 + random.gauss(0, 0.05)),
-        "sensitivity": genes.get("sensitivity", 0.3 + random.gauss(0, 0.05)),
-        "speed":       genes.get("speed", 0.04 + random.gauss(0, 0.005)),
-        "pulse_tune":  genes.get("pulse_tune", 0.5),  # tuning to food pulse frequency
+        "id":         new_id("g"),
+        "type":       "grazer",
+        "pos":        pos or random_point(),
+        "energy":     energy or GRAZER_ENERGY_START,
+        "age":        0, "alive": True,
+        "generation": gen,
+        "parent":     parent,
+        "breed_cool": 0, "births": 0,
+        "emit_freq":  max(0.05, g.get("emit_freq",  GRAZER_BASE_FREQ + random.gauss(0,0.05))),
+        "amplitude":  max(0.05, g.get("amplitude",  0.4 + random.gauss(0,0.05))),
+        "sensitivity":max(0.0,  g.get("sensitivity",0.3 + random.gauss(0,0.05))),
+        "speed":      max(0.005,g.get("speed",      0.04 + random.gauss(0,0.005))),
+        "pulse_tune": max(0.0,  g.get("pulse_tune", 0.5 + random.gauss(0,0.05))),
     }
 
-def new_browser(pos=None, energy=None, generation=0, parent_ids=None, genes=None):
-    genes = genes or {}
+def new_browser(pos=None, energy=None, gen=0, parent=None, genes=None):
+    g = genes or {}
     return {
-        "id":          new_id("b"),
-        "type":        "browser",
-        "pos":         pos or random_point_on_sphere(),
-        "energy":      energy or BROWSER_ENERGY_START,
-        "age":         0,
-        "alive":       True,
-        "generation":  generation,
-        "parent_ids":  parent_ids or [],
-        "breed_cool":  0,
-        "births":      0,
-        "emit_freq":   genes.get("emit_freq", BROWSER_BASE_FREQ + random.gauss(0, 0.05)),
-        "amplitude":   genes.get("amplitude", 0.5 + random.gauss(0, 0.05)),
-        "sensitivity": genes.get("sensitivity", 0.5 + random.gauss(0, 0.05)),
-        "speed":       genes.get("speed", 0.025 + random.gauss(0, 0.003)),
+        "id":         new_id("b"),
+        "type":       "browser",
+        "pos":        pos or random_point(),
+        "energy":     energy or BROWSER_ENERGY_START,
+        "age":        0, "alive": True,
+        "generation": gen,
+        "parent":     parent,
+        "breed_cool": 0, "births": 0,
+        "emit_freq":  max(0.05, g.get("emit_freq",  BROWSER_BASE_FREQ + random.gauss(0,0.05))),
+        "amplitude":  max(0.05, g.get("amplitude",  0.5 + random.gauss(0,0.05))),
+        "sensitivity":max(0.0,  g.get("sensitivity",0.5 + random.gauss(0,0.05))),
+        "speed":      max(0.005,g.get("speed",      0.025 + random.gauss(0,0.003))),
     }
 
-def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed_search=None):
+def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
     return {
         "id":           pid,
-        "pos":          pos or random_point_on_sphere(),
+        "pos":          pos or random_point(),
         "energy":       PRED_ENERGY_START,
-        "age":          0,
-        "alive":        True,
-        "mode":         "search",   # search or hunt
+        "age":          0, "alive": True,
+        "mode":         "search",
         "emit_freq":    PRED_SEARCH_FREQ,
-        "amplitude":    0.6,
         "sensitivity":  sensitivity,
-        "speed_search": speed_search or PRED_SPEED_SEARCH,
+        "speed_search": speed or PRED_SPEED_SEARCH,
         "speed_hunt":   PRED_SPEED_HUNT,
         "kills":        0,
-        "cycles_hungry": 0,
+        "cycles_hungry":0,
         "last_kill":    0,
-        "target":       None,
-        "mutation_rate": 0.08,
-        # Signal detection — does this predator respond to partner's mode switch?
+        # Trajectory memory — rolling window of bloom positions
+        "bloom_memory": [],          # list of (cycle, pos) tuples
+        "memory_len":   PRED_MEMORY_LEN,
+        # Memory-based prediction
+        "predicted_bloom": None,     # where we think bloom will be next
+        "prediction_conf": 0.0,      # confidence 0-1
+        # Communication
         "partner_signal_weight": 0.0,  # evolves from 0
+        "mutation_rate": 0.06,
     }
 
 
 # ── Mutation ───────────────────────────────────────────────────
 
-def mutate_gene(val, rate, scale, lo, hi):
-    if random.random() < rate:
-        return max(lo, min(hi, val + random.gauss(0, scale)))
-    return val
+def mg(v, r, s, lo, hi):
+    return max(lo, min(hi, v + random.gauss(0,s))) if random.random() < r else v
 
-def mutate_entity(entity):
-    r = entity.get("mutation_rate", 0.1) if "mutation_rate" in entity else 0.08
-    e = dict(entity)
-    e["emit_freq"]   = mutate_gene(e["emit_freq"],   r, 0.02, 0.05, 3.0)
-    e["amplitude"]   = mutate_gene(e["amplitude"],   r, 0.02, 0.05, 1.5)
-    e["sensitivity"] = mutate_gene(e["sensitivity"], r, 0.02, 0.0,  2.0)
-    e["speed"]       = mutate_gene(e["speed"],       r*0.5, 0.003, 0.005, 0.15)
+def mutate_entity(e):
+    r = 0.07
+    e["emit_freq"]    = mg(e["emit_freq"],    r, 0.02, 0.05, 3.0)
+    e["amplitude"]    = mg(e["amplitude"],    r, 0.02, 0.05, 1.5)
+    e["sensitivity"]  = mg(e["sensitivity"],  r, 0.02, 0.0,  2.0)
+    e["speed"]        = mg(e["speed"],        r*0.5, 0.003, 0.005, 0.12)
     if "pulse_tune" in e:
-        e["pulse_tune"] = mutate_gene(e["pulse_tune"], r, 0.03, 0.0, 2.0)
+        e["pulse_tune"] = mg(e["pulse_tune"], r, 0.03, 0.0, 2.0)
     return e
 
 def mutate_predator(pred, hungry):
-    p = dict(pred)
-    r = pred["mutation_rate"] * (1.0 + hungry * 0.01)
-    r = min(0.4, r)
-    p["sensitivity"]   = mutate_gene(p["sensitivity"],   r, 0.03, 0.1, 2.0)
-    p["speed_search"]  = mutate_gene(p["speed_search"],  r, 0.003, 0.01, 0.1)
-    p["speed_hunt"]    = mutate_gene(p["speed_hunt"],    r*0.5, 0.003, 0.02, 0.15)
-    p["partner_signal_weight"] = mutate_gene(
-        p["partner_signal_weight"], r*0.3, 0.02, 0.0, 1.0
-    )
+    p    = dict(pred)
+    rate = min(0.35, pred["mutation_rate"] * (1 + hungry * 0.008))
+    p["sensitivity"]          = mg(p["sensitivity"],          rate,    0.03, 0.1, 2.0)
+    p["speed_search"]         = mg(p["speed_search"],         rate,    0.003,0.01,0.09)
+    p["speed_hunt"]           = mg(p["speed_hunt"],           rate*0.5,0.003,0.02,0.14)
+    p["partner_signal_weight"]= mg(p["partner_signal_weight"],rate*0.3,0.02, 0.0, 1.0)
+    p["memory_len"]           = int(max(5, min(100,
+        p.get("memory_len", PRED_MEMORY_LEN) + (random.gauss(0,2) if random.random()<rate else 0)
+    )))
     return p
 
 
-# ── Breeding ───────────────────────────────────────────────────
+# ── Trajectory Memory & Prediction ────────────────────────────
 
-def broadcast_spawn(parent, cycle, n_offspring=None):
+def update_bloom_memory(pred, cycle, blooms):
+    """Record nearest bloom position this cycle."""
+    nb, dist = nearest_bloom(blooms, pred["pos"])
+    if nb is None: return pred
+    mem = pred.get("bloom_memory", [])
+    mem.append((cycle, nb["pos"]))
+    maxlen = pred.get("memory_len", PRED_MEMORY_LEN)
+    pred["bloom_memory"] = mem[-maxlen:]
+    return pred
+
+def predict_bloom(pred):
     """
-    Fish-strategy spawning — single parent releases multiple offspring.
-    No partner required. Energy cost spread across all offspring.
-    Each child inherits mutated genes from parent alone.
+    Use trajectory memory to predict where bloom will be next cycle.
+    If memory shows consistent heading, confidence is high.
+    Returns (predicted_pos, confidence).
+    Confidence feeds signal strength — accurate memory → stronger signal.
     """
-    entity_type = parent["type"]
-    spawn_count  = n_offspring or (GRAZER_SPAWN_COUNT if entity_type == "grazer" else BROWSER_SPAWN_COUNT)
-    energy_cost  = parent["energy"] * 0.5  # spend half energy on spawn event
-    per_child    = energy_cost / spawn_count * 0.6  # each child gets fraction
+    mem = pred.get("bloom_memory", [])
+    if len(mem) < 3:
+        pred["predicted_bloom"] = None
+        pred["prediction_conf"] = 0.0
+        return pred
 
-    parent["energy"]    -= energy_cost
-    parent["breed_cool"] = GRAZER_BREED_COOL if entity_type == "grazer" else BROWSER_BREED_COOL
-    parent["births"]     = parent.get("births", 0) + spawn_count
+    # Calculate average movement vector over last N memory entries
+    recent = mem[-min(10, len(mem)):]
+    if len(recent) < 2:
+        pred["prediction_conf"] = 0.0
+        return pred
 
+    # Vector from oldest to newest position in window
+    oldest_pos = recent[0][1]
+    newest_pos = recent[-1][1]
+    n_steps    = len(recent) - 1
+
+    # Measure consistency — how much does the path vary?
+    if n_steps > 0:
+        step_size  = gcd(oldest_pos, newest_pos) / n_steps
+        # Extrapolate one step forward
+        predicted  = move_toward(newest_pos,
+                                 norm(tuple(2*b-a for a,b in zip(oldest_pos, newest_pos))),
+                                 step_size)
+        # Confidence based on path linearity
+        # Sample intermediate points and check they're on the line
+        deviations = []
+        for i, (cyc, pos) in enumerate(recent[1:-1]):
+            t = (i+1) / n_steps
+            interp = slerp(oldest_pos, newest_pos, t)
+            deviations.append(gcd(pos, interp))
+        avg_dev   = sum(deviations)/len(deviations) if deviations else 0
+        confidence = max(0.0, min(1.0, 1.0 - avg_dev / (BLOOM_RADIUS * 2)))
+        pred["predicted_bloom"] = predicted
+        pred["prediction_conf"] = confidence
+    return pred
+
+
+# ── Broadcast Spawning ─────────────────────────────────────────
+
+def broadcast_spawn(parent, cycle):
+    etype   = parent["type"]
+    n       = GRAZER_SPAWN_COUNT if etype == "grazer" else BROWSER_SPAWN_COUNT
+    cost    = parent["energy"] * 0.45
+    per_child = cost / n * 0.65
+    parent["energy"]    -= cost
+    parent["breed_cool"] = GRAZER_BREED_COOL if etype == "grazer" else BROWSER_BREED_COOL
+    parent["births"]     = parent.get("births",0) + n
     offspring = []
-    for _ in range(spawn_count):
-        # Scatter offspring around parent on sphere
-        spawn_pos = move_toward(parent["pos"], random_point_on_sphere(),
-                                random.uniform(0.05, 0.25))
-
-        # Mutated genes from single parent
-        genes = {
-            "emit_freq":   max(0.05, parent["emit_freq"]   + random.gauss(0, 0.03)),
-            "amplitude":   max(0.05, parent["amplitude"]   + random.gauss(0, 0.02)),
-            "sensitivity": max(0.0,  parent["sensitivity"] + random.gauss(0, 0.02)),
-            "speed":       max(0.005,parent["speed"]       + random.gauss(0, 0.003)),
-        }
+    for _ in range(n):
+        spawn_pos = move_toward(parent["pos"], random_point(), random.uniform(0.04,0.2))
+        genes = {k: max(0.005, parent[k] + random.gauss(0,0.025))
+                 for k in ["emit_freq","amplitude","sensitivity","speed"]
+                 if k in parent}
         if "pulse_tune" in parent:
-            genes["pulse_tune"] = max(0, parent["pulse_tune"] + random.gauss(0, 0.03))
-
-        gen = parent["generation"] + 1
-
-        if entity_type == "grazer":
-            child = new_grazer(pos=spawn_pos, energy=per_child,
-                               generation=gen, parent_ids=[parent["id"]], genes=genes)
-        else:
-            child = new_browser(pos=spawn_pos, energy=per_child,
-                                generation=gen, parent_ids=[parent["id"]], genes=genes)
-
+            genes["pulse_tune"] = max(0, parent["pulse_tune"] + random.gauss(0,0.03))
+        gen   = parent["generation"] + 1
+        child = new_grazer(pos=spawn_pos, energy=per_child, gen=gen,
+                           parent=parent["id"], genes=genes) if etype=="grazer" \
+                else new_browser(pos=spawn_pos, energy=per_child, gen=gen,
+                                  parent=parent["id"], genes=genes)
         offspring.append(child)
-
     return offspring
 
 
-def breed_entities(a, b, cycle):
-    """Legacy sexual reproduction — kept for compatibility."""
-    def blend(x, y): return random.choice([x, y]) + random.gauss(0, 0.01)
-    genes = {k: blend(a.get(k, 0.5), b.get(k, 0.5))
-             for k in ["emit_freq","amplitude","sensitivity","speed"]}
-    if "pulse_tune" in a:
-        genes["pulse_tune"] = blend(a["pulse_tune"], b["pulse_tune"])
+# ── State I/O ──────────────────────────────────────────────────
 
-    mid_pos = normalise(tuple((x+y)/2 for x,y in zip(a["pos"], b["pos"])))
-    gen     = max(a["generation"], b["generation"]) + 1
-
-    if a["type"] == "grazer":
-        child = new_grazer(pos=mid_pos, energy=GRAZER_ENERGY_START*0.4,
-                           generation=gen, parent_ids=[a["id"],b["id"]], genes=genes)
-    else:
-        child = new_browser(pos=mid_pos, energy=BROWSER_ENERGY_START*0.4,
-                            generation=gen, parent_ids=[a["id"],b["id"]], genes=genes)
-
-    a["energy"]     -= a["energy"] * 0.3
-    b["energy"]     -= b["energy"] * 0.3
-    a["breed_cool"]  = a.get("breed_cool_max", GRAZER_BREED_COOL)
-    b["breed_cool"]  = b.get("breed_cool_max", GRAZER_BREED_COOL)
-    a["births"]      = a.get("births", 0) + 1
-    b["births"]      = b.get("births", 0) + 1
-    return child
-
-
-# ── State Management ───────────────────────────────────────────
-
-def f_load(path, default):
+def f2_load(path, default):
     try:
         with open(path) as f: return json.load(f)
     except: return default
 
-def f_save(path, data):
-    with open(path, "w") as f: json.dump(data, f, indent=2)
+def f2_save(path, data):
+    with open(path,"w") as f: json.dump(data, f)
 
-def f_load_state():
-    path  = f"{F_DATA_DIR}/state.json"
-    state = f_load(path, None)
-    if state is None:
-        # Initial population — spread around sphere
-        grazers  = {new_id("g"): new_grazer()  for _ in range(8)}
-        browsers = {new_id("b"): new_browser() for _ in range(4)}
-        entities = {**grazers, **browsers}
+def f2_state_path():  return f"{F2_DATA_DIR}/state_v2.json"
+def f2_log_path():    return f"{F2_DATA_DIR}/log_v2.json"
+def f2_corpus_path(): return f"{F2_DATA_DIR}/corpus_v2.json"
+def f2_moments_path():return f"{F2_DATA_DIR}/moments_v2.json"
 
-        pred_a = new_predator(
-            pos=sphere_to_xyz(0, math.pi/2),  # on equator
-            pid="predator_a",
-            sensitivity=0.6
-        )
-        pred_b = new_predator(
-            pos=sphere_to_xyz(math.pi, math.pi/2),  # opposite side
-            pid="predator_b",
-            sensitivity=0.35,
-            speed_search=0.055
-        )
-
-        state = {
-            "cycle":      0,
-            "status":     "initialised",
-            "started":    datetime.now(timezone.utc).isoformat(),
-            "entities":   entities,
-            "predators":  {"predator_a": pred_a, "predator_b": pred_b},
-            "pulses":     [new_pulse(), new_pulse()],
-            "generation": 0,
-            "births":     0,
-            "deaths":     0,
-            "predator_kills": 0,
-            "lineage":    {},
-            "signal_events": [],  # when predator mode switch preceded partner movement
-        }
-        f_save(path, state)
-    return state
-
-def f_save_state(state):
-    f_save(f"{F_DATA_DIR}/state.json", state)
+def f2_init_state():
+    grazers  = {new_id("g"): new_grazer()  for _ in range(30)}
+    browsers = {new_id("b"): new_browser() for _ in range(8)}
+    pred_a   = new_predator(
+        pos=sph2xyz(0, math.pi/2), pid="predator_a", sensitivity=0.65)
+    pred_b   = new_predator(
+        pos=sph2xyz(math.pi, math.pi/2), pid="predator_b",
+        sensitivity=0.35, speed=0.05)
+    return {
+        "cycle":      0,
+        "status":     "initialised",
+        "started":    datetime.now(timezone.utc).isoformat(),
+        "entities":   {**grazers, **browsers},
+        "predators":  {"predator_a": pred_a, "predator_b": pred_b},
+        "blooms":     [new_bloom(), new_bloom(), new_bloom()],
+        "generation": 0,
+        "births":     0,
+        "deaths":     0,
+        "predator_kills": 0,
+        "lineage":    {},
+        "signal_events":  [],
+        "trajectory_hits": 0,  # times predicted bloom position was accurate
+    }
 
 
 # ── Core Cycle ─────────────────────────────────────────────────
 
-def run_field_cycle(state):
+def run_field_v2_cycle(state):
     cycle    = state["cycle"] + 1
     entities = state["entities"]
     preds    = state["predators"]
-    pulses   = state["pulses"]
-    alive    = {k: v for k, v in entities.items() if v.get("alive", True)}
+    blooms   = state["blooms"]
     moments  = []
 
-    log_path     = f"{F_DATA_DIR}/log.json"
-    corpus_path  = f"{F_DATA_DIR}/corpus.json"
-    moments_path = f"{F_DATA_DIR}/moments.json"
+    # ── Update blooms ──────────────────────────────────────────
+    blooms = update_blooms(blooms, cycle)
+    state["blooms"] = blooms
 
-    # ── Update food pulses ─────────────────────────────────────
-    pulses = update_pulses(pulses, cycle)
-    state["pulses"] = pulses
+    # ── Build spatial grid ─────────────────────────────────────
+    alive = {k:v for k,v in entities.items() if v.get("alive",True)}
+    grid  = build_grid(alive)
 
     # ── Each entity acts ───────────────────────────────────────
     corpus_entries = []
@@ -3176,233 +3176,229 @@ def run_field_cycle(state):
         if entity["breed_cool"] > 0:
             entity["breed_cool"] -= 1
 
-        # Perceive field from others
-        perceived = perceived_field(entity, alive, pulses)
-
-        # Mutate slightly
         entity = mutate_entity(entity)
 
-        # Move
-        entity_type = entity["type"]
-        food_here   = total_food_at(pulses, entity["pos"])
+        # Find nearest bloom for food/movement
+        nb, bloom_dist = nearest_bloom(blooms, entity["pos"])
 
-        # Check predator threat
-        nearest_pred    = None
+        # Check predator threat using grid
+        nearest_pred = None
         nearest_pred_dist = float('inf')
         for pid, pred in preds.items():
-            dist = great_circle_distance(entity["pos"], pred["pos"])
-            if dist < nearest_pred_dist:
-                nearest_pred_dist = dist
-                nearest_pred      = pred
+            d = gcd(entity["pos"], pred["pos"])
+            if d < nearest_pred_dist:
+                nearest_pred_dist = d
+                nearest_pred = pred
 
         # Movement decision
-        if nearest_pred and nearest_pred_dist < 0.4:
-            # Flee predator
+        if nearest_pred and nearest_pred_dist < 0.35:
+            # Flee — move away from nearest predator
             new_pos = move_away(entity["pos"], nearest_pred["pos"],
-                                entity["speed"] * (1 + entity["sensitivity"]))
-        elif food_here > 2.0:
-            # Stay near food — small random drift
-            new_pos = random_walk(entity["pos"], entity["speed"] * 0.3)
-        else:
-            # Seek food gradient
-            food_dir = food_gradient_direction(pulses, entity["pos"])
-            if food_dir:
-                new_pos = move_toward(entity["pos"], food_dir, entity["speed"])
+                                entity["speed"] * (1.5 + entity["sensitivity"]))
+        elif nb and bloom_dist < BLOOM_RADIUS * 3:
+            # Chase bloom — move toward it
+            new_pos = move_toward(entity["pos"], nb["pos"], entity["speed"])
+        elif nb and bloom_dist < BLOOM_RADIUS * 8:
+            # Sense bloom from range — pulse_tune determines detection
+            tune    = entity.get("pulse_tune", 0.5)
+            pull    = tune * entity["sensitivity"]
+            if pull > 0.3:
+                new_pos = move_toward(entity["pos"], nb["pos"], entity["speed"] * 0.7)
             else:
-                new_pos = random_walk(entity["pos"], entity["speed"])
+                new_pos = random_walk(entity["pos"], entity["speed"] * 0.5)
+        else:
+            new_pos = random_walk(entity["pos"], entity["speed"] * 0.4)
 
         entity["pos"] = new_pos
 
-        # Energy from food
-        food_gained = 0.0
-        food_here   = total_food_at(pulses, entity["pos"])
-        if food_here > 0.5:
-            gain = min(food_here, GRAZER_FOOD_GAIN if entity_type == "grazer" else BROWSER_FOOD_GAIN)
-            entity["energy"] += gain
-            food_gained = gain
+        # Eat
+        food = food_at(blooms, entity["pos"])
+        max_e   = GRAZER_ENERGY_MAX if entity["type"]=="grazer" else BROWSER_ENERGY_MAX
+        deplete = GRAZER_DEPLETE    if entity["type"]=="grazer" else BROWSER_DEPLETE
+        entity["energy"] = max(0, min(max_e,
+            entity["energy"] + food - deplete - entity["speed"]*0.3))
 
-        max_e   = GRAZER_ENERGY_MAX if entity_type == "grazer" else BROWSER_ENERGY_MAX
-        deplete = GRAZER_DEPLETE    if entity_type == "grazer" else BROWSER_DEPLETE
-        entity["energy"] = max(0, min(max_e, entity["energy"] - deplete - entity["speed"] * 0.5))
-
-        max_age = GRAZER_MAX_AGE if entity_type == "grazer" else BROWSER_MAX_AGE
+        max_age = GRAZER_MAX_AGE if entity["type"]=="grazer" else BROWSER_MAX_AGE
         if entity["energy"] <= 0 or entity["age"] >= max_age:
             entity["alive"] = False
             state["deaths"] += 1
-            moments.append({"cycle": cycle, "type": "death",
-                            "entity": eid, "entity_type": entity_type})
 
         # Corpus
-        theta, phi = xyz_to_sphere(*entity["pos"])
         corpus_entries.append({
-            "id":       eid,
-            "type":     entity_type,
-            "cycle":    cycle,
-            "theta":    round(theta, 3),
-            "phi":      round(phi, 3),
-            "energy":   round(entity["energy"], 2),
-            "freq":     round(entity["emit_freq"], 4),
-            "perceived": round(perceived, 4),
-            "food":     round(food_here, 2),
-            "gen":      entity["generation"],
+            "id": eid, "type": entity["type"], "cycle": cycle,
+            "energy": round(entity["energy"],1),
+            "freq": round(entity["emit_freq"],4),
+            "food": round(food,2),
+            "bloom_dist": round(bloom_dist,3) if bloom_dist < float('inf') else 9.9,
+            "gen": entity["generation"],
         })
-
         entities[eid] = entity
 
     # ── Predators act ──────────────────────────────────────────
-    alive_now = {k: v for k, v in entities.items() if v.get("alive", True)}
-    prev_modes = {pid: p["mode"] for pid, p in preds.items()}
+    alive_now = {k:v for k,v in entities.items() if v.get("alive",True)}
+    prev_modes = {pid: p["mode"] for pid,p in preds.items()}
 
     for pid, pred in preds.items():
-        pred["age"]    += 1
-        # Mode-dependent energy cost — hunt is expensive, search is cheap
-        # This forces strategic switching: don't hunt until confident
-        mode_cost = PRED_DEPLETE * 4.0 if pred["mode"] == "hunt" else PRED_DEPLETE * 0.4
+        pred["age"] += 1
+
+        # Mode-dependent energy cost
+        mode_cost = PRED_DEPLETE_HUNT if pred["mode"]=="hunt" else PRED_DEPLETE_SEARCH
         pred["energy"] -= mode_cost
 
         if pred["energy"] <= 0 or pred["age"] >= PRED_MAX_AGE:
-            pred["energy"] = PRED_ENERGY_START * 0.6
+            pred["energy"] = PRED_ENERGY_START * 0.5
             pred["age"]    = 0
-            pred["pos"]    = random_point_on_sphere()
-            logging.info(f"[FIELD] {pid} exhausted — respawn")
+            pred["pos"]    = random_point()
+            pred["bloom_memory"] = []
             continue
 
-        # Find nearest prey
-        nearest_prey      = None
-        nearest_prey_dist = float('inf')
-        for eid, entity in alive_now.items():
-            # Detect by field — low freq for search, switches to high freq when close
-            dist = great_circle_distance(pred["pos"], entity["pos"])
-            freq = entity["emit_freq"]
-            amp  = entity["amplitude"]
-            signal = field_strength(entity["pos"], freq, amp, pred["pos"]) * pred["sensitivity"]
+        # Update bloom trajectory memory
+        pred = update_bloom_memory(pred, cycle, blooms)
+        pred = predict_bloom(pred)
 
-            # In search mode, low freq entities more detectable at range
+        # Find nearest prey using spatial grid
+        nearby_ids = nearby_entities(pred["pos"], grid, alive_now)
+        nearest_prey = None
+        nearest_dist = float('inf')
+        for nid in nearby_ids:
+            if nid not in alive_now: continue
+            e    = alive_now[nid]
+            dist = gcd(pred["pos"], e["pos"])
+            freq = e.get("emit_freq", 0.5)
+            # Low freq more detectable at range (search mode)
+            # High freq more detectable when close (hunt mode)
             if pred["mode"] == "search":
-                detection_bonus = max(0, 1.0 - freq * 2)  # low freq bonus
-                effective_signal = signal * (1 + detection_bonus)
+                detect_bonus = max(0, 1.0 - freq * 1.5)
             else:
-                effective_signal = signal
+                detect_bonus = freq * 0.5
+            signal = (e.get("amplitude",0.5) * (1+detect_bonus) *
+                      math.exp(-(0.05 + freq*0.3) * dist) * pred["sensitivity"])
+            if signal > 0.04 and dist < nearest_dist:
+                nearest_dist = dist
+                nearest_prey = e
 
-            if effective_signal > 0.05 and dist < nearest_prey_dist:
-                nearest_prey_dist = dist
-                nearest_prey      = entity
-
-        # Also check partner signal — does partner mode switch inform movement?
+        # Partner signal — does memory-weighted signal inform movement?
         partner_signal = 0.0
         for other_pid, other_pred in preds.items():
             if other_pid == pid: continue
-            prev_mode = prev_modes.get(other_pid, "search")
-            curr_mode = other_pred.get("mode", "search")
+            prev_mode = prev_modes.get(other_pid,"search")
+            curr_mode = other_pred.get("mode","search")
             if prev_mode == "search" and curr_mode == "hunt":
-                # Partner switched to hunt — signal detected
-                partner_dist   = great_circle_distance(pred["pos"], other_pred["pos"])
-                partner_signal = pred["partner_signal_weight"] * math.exp(-0.5 * partner_dist)
-                if partner_signal > 0.1:
+                # Partner switched — signal weighted by their prediction confidence
+                conf    = other_pred.get("prediction_conf", 0.0)
+                p_dist  = gcd(pred["pos"], other_pred["pos"])
+                # Signal strength = partner_signal_weight × prediction_confidence
+                partner_signal = (pred["partner_signal_weight"] * conf *
+                                  math.exp(-0.4 * p_dist))
+                if partner_signal > 0.08:
                     state["signal_events"].append({
-                        "cycle":     cycle,
-                        "receiver":  pid,
-                        "sender":    other_pid,
-                        "strength":  round(partner_signal, 3),
+                        "cycle":    cycle,
+                        "receiver": pid,
+                        "sender":   other_pid,
+                        "strength": round(partner_signal, 3),
+                        "conf":     round(conf, 3),
                     })
-                    state["signal_events"] = state["signal_events"][-100:]
+                    state["signal_events"] = state["signal_events"][-200:]
 
-        # Switch mode based on proximity
-        if nearest_prey and nearest_prey_dist < PRED_SWITCH_DIST:
-            pred["mode"]      = "hunt"
-            pred["emit_freq"] = PRED_HUNT_FREQ
-            speed             = pred["speed_hunt"]
+        # Mode switch
+        if nearest_prey and nearest_dist < PRED_SWITCH_DIST:
+            pred["mode"]     = "hunt"
+            pred["emit_freq"]= PRED_HUNT_FREQ
+            speed            = pred["speed_hunt"]
         else:
-            pred["mode"]      = "search"
-            pred["emit_freq"] = PRED_SEARCH_FREQ
-            speed             = pred["speed_search"]
-            # If partner signal detected, move toward partner's position
-            if partner_signal > 0.1:
-                other_pos = [p["pos"] for p_id, p in preds.items() if p_id != pid][0]
-                nearest_prey_dist_adj = nearest_prey_dist
-                # Bias movement toward partner's area
-                pred["pos"] = move_toward(pred["pos"], other_pos, speed * partner_signal)
+            pred["mode"]     = "search"
+            pred["emit_freq"]= PRED_SEARCH_FREQ
+            speed            = pred["speed_search"]
+            # Use prediction to move toward anticipated bloom position
+            if pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
+                # Move toward predicted bloom position weighted by confidence
+                pred["pos"] = move_toward(pred["pos"], pred["predicted_bloom"],
+                                          speed * pred["prediction_conf"])
+            elif partner_signal > 0.08 and other_pred.get("predicted_bloom"):
+                # Partner's signal — move toward their predicted position
+                pred["pos"] = move_toward(pred["pos"],
+                                          other_pred["predicted_bloom"],
+                                          speed * partner_signal)
+            else:
+                # Seek nearest bloom or random walk
+                nb2, _ = nearest_bloom(blooms, pred["pos"])
+                if nb2:
+                    pred["pos"] = move_toward(pred["pos"], nb2["pos"], speed)
+                else:
+                    pred["pos"] = random_walk(pred["pos"], speed*0.5)
 
-        # Move toward prey
-        if nearest_prey:
+        if pred["mode"] == "hunt" and nearest_prey:
             pred["pos"] = move_toward(pred["pos"], nearest_prey["pos"], speed)
-        else:
-            pred["pos"] = random_walk(pred["pos"], speed * 0.5)
 
         # Attack
         killed = False
-        for eid, entity in list(alive_now.items()):
-            if not entity.get("alive", True): continue
-            dist = great_circle_distance(pred["pos"], entity["pos"])
-            if dist < 0.06:
-                entity["energy"] -= pred["damage"]
-                if entity["energy"] <= 0:
-                    entity["alive"] = False
-                    pred["kills"]  += 1
-                    pred["last_kill"] = cycle
-                    pred["cycles_hungry"] = 0
-                    pred["energy"] += 40.0 if entity["type"] == "browser" else 20.0
+        for nid in nearby_ids:
+            if nid not in alive_now: continue
+            e = alive_now[nid]
+            if not e.get("alive",True): continue
+            if gcd(pred["pos"], e["pos"]) < 0.05:
+                e["energy"] -= pred["damage"]
+                if e["energy"] <= 0:
+                    e["alive"] = False
+                    pred["kills"]         += 1
+                    pred["last_kill"]      = cycle
+                    pred["cycles_hungry"]  = 0
+                    pred["energy"]        += 50.0 if e["type"]=="browser" else 25.0
                     state["predator_kills"] += 1
                     killed = True
+                    # Was prediction accurate?
+                    if pred.get("predicted_bloom"):
+                        nb3, bd3 = nearest_bloom(blooms, e["pos"])
+                        if bd3 < BLOOM_RADIUS * 1.5:
+                            state["trajectory_hits"] += 1
                     moments.append({
-                        "cycle":      cycle,
-                        "type":       "predation",
-                        "entity":     eid,
-                        "entity_type": entity["type"],
-                        "predator":   pid,
-                        "pred_mode":  pred["mode"],
+                        "cycle": cycle, "type": "predation",
+                        "entity": nid, "entity_type": e["type"],
+                        "predator": pid, "pred_mode": pred["mode"],
+                        "pred_conf": round(pred.get("prediction_conf",0),3),
                     })
-                    entities[eid] = entity
-                    logging.info(f"[FIELD] {pid} killed {eid} ({entity['type']}) in {pred['mode']} mode")
+                    entities[nid] = e
                     break
 
         if not killed:
             pred["cycles_hungry"] += 1
 
-        # Mutate predator
         preds[pid] = mutate_predator(pred, pred["cycles_hungry"])
 
-    # ── Broadcast Spawning — fish strategy ────────────────────
-    alive_now = {k: v for k, v in entities.items() if v.get("alive", True)}
-    grazers   = [(k, v) for k, v in alive_now.items() if v["type"] == "grazer"]
-    browsers  = [(k, v) for k, v in alive_now.items() if v["type"] == "browser"]
-    alive_g   = len(grazers)
-    alive_b   = len(browsers)
+    # ── Breeding ───────────────────────────────────────────────
+    alive_now = {k:v for k,v in entities.items() if v.get("alive",True)}
+    alive_g   = sum(1 for v in alive_now.values() if v["type"]=="grazer")
+    alive_b   = sum(1 for v in alive_now.values() if v["type"]=="browser")
 
     new_offspring = []
     for eid, entity in list(alive_now.items()):
-        entity_type = entity["type"]
-        max_pop   = MAX_GRAZERS  if entity_type == "grazer" else MAX_BROWSERS
-        thresh    = GRAZER_BREED_THRESH if entity_type == "grazer" else BROWSER_BREED_THRESH
-        cur_pop   = alive_g if entity_type == "grazer" else alive_b
+        etype   = entity["type"]
+        max_pop = MAX_GRAZERS if etype=="grazer" else MAX_BROWSERS
+        thresh  = GRAZER_BREED_THRESH if etype=="grazer" else BROWSER_BREED_THRESH
+        cur_pop = alive_g if etype=="grazer" else alive_b
 
         if cur_pop >= max_pop: continue
         if entity["energy"] < thresh: continue
-        if entity.get("breed_cool", 0) > 0: continue
+        if entity.get("breed_cool",0) > 0: continue
 
-        # Broadcast spawn — no partner needed
         children = broadcast_spawn(entity, cycle)
         for child in children:
             new_offspring.append(child)
-            state["births"] += 1
-            state["generation"] = max(state["generation"], child["generation"])
+            state["births"]     += 1
+            state["generation"]  = max(state["generation"], child["generation"])
             state["lineage"][child["id"]] = {
-                "parents": [eid],
-                "cycle":   cycle,
-                "generation": child["generation"],
+                "parent": eid, "cycle": cycle, "gen": child["generation"]
             }
             moments.append({
-                "cycle":      cycle,
-                "type":       "birth",
-                "child_id":   child["id"],
-                "child_type": child["type"],
+                "cycle": cycle, "type": "birth",
+                "child_id": child["id"], "child_type": child["type"],
                 "generation": child["generation"],
-                "child_freq": round(child["emit_freq"], 4),
+                "freq": round(child["emit_freq"],4),
             })
-            if entity_type == "grazer": alive_g += 1
+            if etype=="grazer": alive_g += 1
             else: alive_b += 1
-            if alive_g >= MAX_GRAZERS and entity_type == "grazer": break
-            if alive_b >= MAX_BROWSERS and entity_type == "browser": break
+            if alive_g >= MAX_GRAZERS and etype=="grazer": break
+            if alive_b >= MAX_BROWSERS and etype=="browser": break
 
     for e in new_offspring:
         entities[e["id"]] = e
@@ -3410,148 +3406,158 @@ def run_field_cycle(state):
     # ── Minimum population ─────────────────────────────────────
     alive_g = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="grazer")
     alive_b = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="browser")
-    if alive_g < MIN_GRAZERS:
-        for _ in range(MIN_GRAZERS - alive_g):
-            g = new_grazer()
-            entities[g["id"]] = g
-    if alive_b < MIN_BROWSERS:
-        for _ in range(MIN_BROWSERS - alive_b):
-            b = new_browser()
-            entities[b["id"]] = b
+    for _ in range(max(0, MIN_GRAZERS - alive_g)):
+        g = new_grazer(); entities[g["id"]] = g
+    for _ in range(max(0, MIN_BROWSERS - alive_b)):
+        b = new_browser(); entities[b["id"]] = b
 
     # ── Save corpus ────────────────────────────────────────────
-    corpus = f_load(corpus_path, [])
+    corpus = f2_load(f2_corpus_path(), [])
     corpus.extend(corpus_entries)
-    f_save(corpus_path, corpus[-15000:])
+    f2_save(f2_corpus_path(), corpus[-20000:])
 
     # ── Save moments ───────────────────────────────────────────
     if moments:
-        existing = f_load(moments_path, [])
+        existing = f2_load(f2_moments_path(), [])
         existing.extend(moments)
-        f_save(moments_path, existing)
+        f2_save(f2_moments_path(), existing)
 
     # ── Log ────────────────────────────────────────────────────
-    log = f_load(log_path, [])
     alive_g = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="grazer")
     alive_b = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="browser")
+    log = f2_load(f2_log_path(), [])
     log.append({
-        "cycle":     cycle,
-        "grazers":   alive_g,
-        "browsers":  alive_b,
-        "births":    state["births"],
-        "deaths":    state["deaths"],
-        "pred_kills": state["predator_kills"],
-        "signal_events": len(state.get("signal_events", [])),
-        "pred_a_mode": preds.get("predator_a", {}).get("mode", "?"),
-        "pred_b_mode": preds.get("predator_b", {}).get("mode", "?"),
+        "cycle":    cycle,
+        "grazers":  alive_g,
+        "browsers": alive_b,
+        "births":   state["births"],
+        "deaths":   state["deaths"],
+        "kills":    state["predator_kills"],
+        "signals":  len(state.get("signal_events",[])),
+        "traj_hits":state.get("trajectory_hits",0),
+        "pred_a_conf": round(preds.get("predator_a",{}).get("prediction_conf",0),3),
+        "pred_b_conf": round(preds.get("predator_b",{}).get("prediction_conf",0),3),
+        "blooms":   sum(1 for b in blooms if b["active"]),
     })
-    f_save(log_path, log[-3000:])
+    f2_save(f2_log_path(), log[-5000:])
 
-    # ── Update state ───────────────────────────────────────────
     state["cycle"]    = cycle
     state["entities"] = entities
-    state["predators"] = preds
+    state["predators"]= preds
     state["status"]   = "running"
-    f_save_state(state)
+    f2_save(f2_state_path(), state)
 
     logging.info(
-        f"[FIELD] Cycle {cycle} | G={alive_g} B={alive_b} | "
-        f"births={state['births']} deaths={state['deaths']} kills={state['predator_kills']} | "
-        f"signals={len(state.get('signal_events',[]))}"
+        f"[FIELD2] Cycle {cycle} | G={alive_g} B={alive_b} | "
+        f"kills={state['predator_kills']} signals={len(state.get('signal_events',[]))} "
+        f"traj={state.get('trajectory_hits',0)} | "
+        f"conf_a={preds.get('predator_a',{}).get('prediction_conf',0):.2f} "
+        f"conf_b={preds.get('predator_b',{}).get('prediction_conf',0):.2f}"
     )
     return {"cycle": cycle, "grazers": alive_g, "browsers": alive_b}
 
 
 # ── Experiment Loop ────────────────────────────────────────────
 
-def run_field():
+def run_field_v2():
     def loop():
-        state = f_load_state()
-        if state["cycle"] >= F_MAX_CYCLES:
-            logging.info("[FIELD] Complete")
+        state = f2_load(f2_state_path(), None) or f2_init_state()
+        f2_save(f2_state_path(), state)
+        if state["cycle"] >= F2_MAX_CYCLES:
+            logging.info("[FIELD2] Already complete")
             return
-        logging.info(f"[FIELD] Starting from cycle {state['cycle']}")
-        while state["cycle"] < F_MAX_CYCLES:
-            if os.environ.get("FIELD_ACTIVE", "true").lower() == "false":
-                state["status"] = "halted"
-                f_save_state(state)
-                break
+        logging.info(f"[FIELD2] Starting from cycle {state['cycle']}")
+        while state["cycle"] < F2_MAX_CYCLES:
+            if os.environ.get("FIELD_ACTIVE","true").lower() == "false":
+                state["status"] = "halted"; f2_save(f2_state_path(), state); break
             try:
-                run_field_cycle(state)
+                run_field_v2_cycle(state)
             except Exception as e:
-                logging.error(f"[FIELD] Error: {e}")
+                logging.error(f"[FIELD2] Error cycle {state['cycle']}: {e}")
                 import traceback; traceback.print_exc()
-            time.sleep(F_CYCLE_DELAY)
-        if state["cycle"] >= F_MAX_CYCLES:
-            state["status"] = "complete"
-            f_save_state(state)
-            logging.info("[FIELD] Complete")
+            time.sleep(F2_CYCLE_DELAY)
+        if state["cycle"] >= F2_MAX_CYCLES:
+            state["status"] = "complete"; f2_save(f2_state_path(), state)
     Thread(target=loop, daemon=True).start()
 
 
 # ── Language Analysis ──────────────────────────────────────────
 
-def analyse_field_language():
-    corpus = f_load(f"{F_DATA_DIR}/corpus.json", [])
-    if len(corpus) < 100:
+def analyse_field_v2():
+    corpus = f2_load(f2_corpus_path(), [])
+    state  = f2_load(f2_state_path(), {})
+    if len(corpus) < 50:
         return {"status": "insufficient data", "entries": len(corpus)}
 
-    # Does perceived field correlate with food presence?
-    food_present  = [e for e in corpus if e.get("food", 0) > 2.0]
-    food_absent   = [e for e in corpus if e.get("food", 0) < 0.5]
-    avg_perc_food = sum(e["perceived"] for e in food_present)  / max(len(food_present), 1)
-    avg_perc_none = sum(e["perceived"] for e in food_absent)   / max(len(food_absent),  1)
+    # Bloom proximity vs survival
+    near_bloom  = [e for e in corpus if e.get("bloom_dist",9.9) < BLOOM_RADIUS]
+    far_bloom   = [e for e in corpus if e.get("bloom_dist",9.9) > BLOOM_RADIUS*3]
+    avg_e_near  = sum(e["energy"] for e in near_bloom)/max(len(near_bloom),1)
+    avg_e_far   = sum(e["energy"] for e in far_bloom)/max(len(far_bloom),1)
 
-    # Frequency drift by generation
+    # Frequency evolution by generation
     by_gen = {}
     for e in corpus:
-        g = str(e.get("gen", 0))
-        by_gen.setdefault(g, []).append(e.get("freq", 0))
-    freq_by_gen = {g: round(sum(v)/len(v), 4) for g, v in by_gen.items()}
+        g = str(e.get("gen",0))
+        by_gen.setdefault(g,[]).append(e.get("freq",0))
+    freq_by_gen = {g: round(sum(v)/len(v),4) for g,v in by_gen.items()}
 
-    # Signal events — predator mode switches that preceded partner movement
-    state  = f_load(f"{F_DATA_DIR}/state.json", {})
-    signal_events = state.get("signal_events", [])
+    # Trajectory confidence over time
+    log = f2_load(f2_log_path(), [])
+    recent_conf = [(e["cycle"], e.get("pred_a_conf",0), e.get("pred_b_conf",0))
+                   for e in log[-50:]]
 
+    sigs = state.get("signal_events",[])
     return {
-        "entries":         len(corpus),
-        "food_signal": {
-            "perceived_near_food": round(avg_perc_food, 4),
-            "perceived_no_food":   round(avg_perc_none, 4),
-            "differential":        round(avg_perc_food - avg_perc_none, 4),
+        "entries":          len(corpus),
+        "bloom_proximity":  {
+            "avg_energy_near_bloom": round(avg_e_near,2),
+            "avg_energy_far_bloom":  round(avg_e_far,2),
+            "differential":          round(avg_e_near - avg_e_far,2),
+            "interpretation": "Positive = bloom-following entities healthier" if avg_e_near > avg_e_far else "No bloom advantage yet"
         },
         "frequency_by_generation": freq_by_gen,
-        "predator_signal_events":  len(signal_events),
-        "recent_signals":          signal_events[-5:],
-        "interpretation": (
-            "Predator mode-switch signals detected — potential communication emerging"
-            if len(signal_events) > 10
-            else "No signal events yet — predators not yet reading each other's mode"
-        ),
+        "trajectory": {
+            "total_signals":   len(sigs),
+            "trajectory_hits": state.get("trajectory_hits",0),
+            "recent_confidence": recent_conf[-5:],
+            "interpretation": (
+                "Predators building accurate bloom trajectory models"
+                if any(c[1]>0.5 or c[2]>0.5 for c in recent_conf[-10:])
+                else "Trajectory confidence still low — memory building"
+            )
+        },
+        "signal_events": len(sigs),
+        "recent_signals": sigs[-5:],
     }
 
 
 # ── Routes ─────────────────────────────────────────────────────
 
+
+
 @app.route("/field/health")
-def f_health():
+def fv2_health():
     try:
-        state = f_load_state()
-        alive = {k: v for k, v in state.get("entities", {}).items() if v.get("alive", True)}
-        grazers  = sum(1 for v in alive.values() if v["type"] == "grazer")
-        browsers = sum(1 for v in alive.values() if v["type"] == "browser")
+        state = f2_load(f2_state_path(), None) or f2_init_state()
+        alive = {k:v for k,v in state.get("entities",{}).items() if v.get("alive",True)}
+        g = sum(1 for v in alive.values() if v["type"]=="grazer")
+        b = sum(1 for v in alive.values() if v["type"]=="browser")
         return jsonify({
-            "service":    "the-field",
-            "status":     state.get("status", "uninitialised"),
-            "cycle":      state.get("cycle", 0),
-            "max":        F_MAX_CYCLES,
-            "grazers":    grazers,
-            "browsers":   browsers,
-            "generation": state.get("generation", 0),
-            "births":     state.get("births", 0),
-            "deaths":     state.get("deaths", 0),
-            "kills":      state.get("predator_kills", 0),
-            "signals":    len(state.get("signal_events", [])),
+            "service":    "the-field-v2",
+            "version":    2,
+            "status":     state.get("status","uninitialised"),
+            "cycle":      state.get("cycle",0),
+            "max":        F2_MAX_CYCLES,
+            "grazers":    g,
+            "browsers":   b,
+            "generation": state.get("generation",0),
+            "births":     state.get("births",0),
+            "deaths":     state.get("deaths",0),
+            "kills":      state.get("predator_kills",0),
+            "signals":    len(state.get("signal_events",[])),
+            "traj_hits":  state.get("trajectory_hits",0),
+            "blooms":     sum(1 for bm in state.get("blooms",[]) if bm.get("active")),
             "time":       datetime.now(timezone.utc).isoformat(),
         })
     except Exception as e:
@@ -3559,123 +3565,124 @@ def f_health():
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
 @app.route("/field/state")
-def f_state():
-    state = f_load_state()
-    # Summarise entities
-    entities = state.get("entities", {})
+def fv2_state():
+    state = f2_load(f2_state_path(), None) or f2_init_state()
+    alive = {k:v for k,v in state.get("entities",{}).items() if v.get("alive",True)}
     summary = {}
-    for eid, e in entities.items():
-        if e.get("alive", True):
-            theta, phi = xyz_to_sphere(*e["pos"])
-            summary[eid] = {
-                "type":       e["type"],
-                "theta":      round(math.degrees(theta), 1),
-                "phi":        round(math.degrees(phi), 1),
-                "energy":     round(e["energy"], 1),
-                "freq":       round(e["emit_freq"], 4),
-                "sensitivity": round(e["sensitivity"], 3),
-                "generation": e["generation"],
-                "age":        e["age"],
-            }
+    for eid, e in alive.items():
+        theta, phi = xyz2sph(*e["pos"])
+        summary[eid] = {
+            "type":       e["type"],
+            "theta":      round(math.degrees(theta),1),
+            "phi":        round(math.degrees(phi),1),
+            "energy":     round(e["energy"],1),
+            "freq":       round(e["emit_freq"],4),
+            "generation": e["generation"],
+            "age":        e["age"],
+        }
     preds = {}
-    for pid, p in state.get("predators", {}).items():
-        theta, phi = xyz_to_sphere(*p["pos"])
+    for pid, p in state.get("predators",{}).items():
+        theta, phi = xyz2sph(*p["pos"])
         preds[pid] = {
-            "theta":      round(math.degrees(theta), 1),
-            "phi":        round(math.degrees(phi), 1),
-            "mode":       p["mode"],
-            "kills":      p["kills"],
-            "hungry":     p["cycles_hungry"],
-            "sensitivity": round(p["sensitivity"], 3),
-            "speed_search": round(p["speed_search"], 4),
-            "speed_hunt":   round(p["speed_hunt"], 4),
-            "partner_signal_weight": round(p["partner_signal_weight"], 3),
+            "theta":           round(math.degrees(theta),1),
+            "phi":             round(math.degrees(phi),1),
+            "mode":            p["mode"],
+            "kills":           p["kills"],
+            "hungry":          p["cycles_hungry"],
+            "sensitivity":     round(p["sensitivity"],3),
+            "partner_weight":  round(p["partner_signal_weight"],3),
+            "prediction_conf": round(p.get("prediction_conf",0),3),
+            "memory_len":      p.get("memory_len", PRED_MEMORY_LEN),
+            "memory_entries":  len(p.get("bloom_memory",[])),
         }
     return jsonify({
         "cycle":      state.get("cycle"),
         "generation": state.get("generation"),
         "entities":   summary,
         "predators":  preds,
-        "pulses":     len([p for p in state.get("pulses", []) if p["active"]]),
-        "signals":    len(state.get("signal_events", [])),
+        "blooms":     sum(1 for bm in state.get("blooms",[]) if bm.get("active")),
+        "signals":    len(state.get("signal_events",[])),
+        "traj_hits":  state.get("trajectory_hits",0),
     })
 
-@app.route("/field/language")
-def f_language():
-    return jsonify(analyse_field_language())
-
 @app.route("/field/signals")
-def f_signals():
-    """The communication record — mode-switch signals between predators."""
-    state = f_load_state()
-    events = state.get("signal_events", [])
+def fv2_signals():
+    state = f2_load(f2_state_path(), {})
+    events = state.get("signal_events",[])
     return jsonify({
         "total":  len(events),
         "recent": events[-20:],
-        "note":   "Each event: predator A switched to hunt mode, predator B detected and responded",
+        "note":   "Signal = predator B responded to predator A mode-switch, weighted by A's trajectory confidence",
     })
 
+@app.route("/field/trajectory")
+def fv2_trajectory():
+    """The new endpoint — bloom trajectory memory and prediction accuracy."""
+    state = f2_load(f2_state_path(), {})
+    preds = state.get("predators",{})
+    result = {}
+    for pid, p in preds.items():
+        mem = p.get("bloom_memory",[])
+        result[pid] = {
+            "memory_entries":  len(mem),
+            "memory_len":      p.get("memory_len", PRED_MEMORY_LEN),
+            "prediction_conf": round(p.get("prediction_conf",0),3),
+            "last_5_positions": [
+                {"cycle": c, "theta": round(math.degrees(xyz2sph(*pos)[0]),1),
+                 "phi":   round(math.degrees(xyz2sph(*pos)[1]),1)}
+                for c, pos in mem[-5:]
+            ] if mem else [],
+        }
+    return jsonify({
+        "predators":     result,
+        "trajectory_hits": state.get("trajectory_hits",0),
+        "total_kills":   state.get("predator_kills",0),
+        "note": "trajectory_hits = kills made when predator was near predicted bloom position",
+    })
+
+@app.route("/field/language")
+def fv2_language():
+    return jsonify(analyse_field_v2())
+
 @app.route("/field/moments")
-def f_moments():
-    limit = int(request.args.get("limit", 20))
-    m = f_load(f"{F_DATA_DIR}/moments.json", [])
+def fv2_moments():
+    limit = int(request.args.get("limit",20))
+    m = f2_load(f2_moments_path(), [])
     return jsonify({"moments": m[-limit:], "total": len(m)})
 
 @app.route("/field/log")
-def f_log():
-    limit = int(request.args.get("limit", 50))
-    log   = f_load(f"{F_DATA_DIR}/log.json", [])
+def fv2_log():
+    limit = int(request.args.get("limit",50))
+    log = f2_load(f2_log_path(), [])
     return jsonify({"entries": log[-limit:], "total": len(log)})
 
 @app.route("/field/start", methods=["POST"])
-def f_start():
-    try:
-        if request.args.get("key") != F_WRITE_KEY:
-            return jsonify({"error": "Unauthorised"}), 401
-        state = f_load_state()
-        if state.get("status") == "running":
-            return jsonify({"error": "Already running", "cycle": state.get("cycle")})
-        # Fresh state
-        grazers  = {new_id("g"): new_grazer()  for _ in range(8)}
-        browsers = {new_id("b"): new_browser() for _ in range(4)}
-        pred_a = new_predator(pos=sphere_to_xyz(0, math.pi/2), pid="predator_a", sensitivity=0.6)
-        pred_b = new_predator(pos=sphere_to_xyz(math.pi, math.pi/2), pid="predator_b",
-                              sensitivity=0.35, speed_search=0.055)
-        fresh = {
-            "cycle":      0,
-            "status":     "initialised",
-            "started":    datetime.now(timezone.utc).isoformat(),
-            "entities":   {**grazers, **browsers},
-            "predators":  {"predator_a": pred_a, "predator_b": pred_b},
-            "pulses":     [new_pulse(), new_pulse()],
-            "generation": 0,
-            "births":     0,
-            "deaths":     0,
-            "predator_kills": 0,
-            "lineage":    {},
-            "signal_events": [],
-        }
-        f_save_state(fresh)
-        run_field()
-        return jsonify({
-            "status":   "started",
-            "max":      F_MAX_CYCLES,
-            "entities": "8 grazers + 4 browsers",
-            "predators": "2 (different sensing/speed profiles)",
-            "world":    "sphere S² — positions as unit vectors",
-        })
-    except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+def fv2_start():
+    if request.args.get("key") != F2_WRITE_KEY:
+        return jsonify({"error":"Unauthorised"}), 401
+    state = f2_init_state()
+    f2_save(f2_state_path(), state)
+    run_field_v2()
+    return jsonify({
+        "status":    "started",
+        "version":   2,
+        "max":       F2_MAX_CYCLES,
+        "entities":  "30 grazers + 8 browsers",
+        "predators": "2 with trajectory memory",
+        "world":     "sphere S² with moving blooms",
+        "description": "Zooplankton-style drifting food. Broadcast spawning. Memory-weighted signals.",
+    })
 
 @app.route("/field/reset", methods=["POST"])
-def f_reset():
-    if request.args.get("key") != F_WRITE_KEY:
-        return jsonify({"error": "Unauthorised"}), 401
-    for fname in ["state.json","log.json","corpus.json","moments.json"]:
-        try: os.remove(f"{F_DATA_DIR}/{fname}")
+def fv2_reset():
+    if request.args.get("key") != F2_WRITE_KEY:
+        return jsonify({"error":"Unauthorised"}), 401
+    for fname in ["state_v2.json","log_v2.json","corpus_v2.json","moments_v2.json"]:
+        try: os.remove(f"{F2_DATA_DIR}/{fname}")
         except: pass
-    return jsonify({"status": "reset"})
+    return jsonify({"status":"reset","version":2})
+
+
 # ── Startup ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
