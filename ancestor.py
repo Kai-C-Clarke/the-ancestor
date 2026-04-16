@@ -3287,7 +3287,9 @@ def run_field_v2_cycle(state):
 
         # Partner signal — does memory-weighted signal inform movement?
         partner_signal = 0.0
+        last_other_pred = None
         for other_pid, other_pred in preds.items():
+            last_other_pred = other_pred  # track for use after loop
             if other_pid == pid: continue
             prev_mode = prev_modes.get(other_pid,"search")
             curr_mode = other_pred.get("mode","search")
@@ -3319,16 +3321,16 @@ def run_field_v2_cycle(state):
             speed            = pred["speed_search"]
             # Use prediction to move toward anticipated bloom position
             if pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
-                # Move toward predicted bloom position weighted by confidence
                 pred["pos"] = move_toward(pred["pos"], pred["predicted_bloom"],
                                           speed * pred["prediction_conf"])
-            elif partner_signal > 0.08 and other_pred.get("predicted_bloom"):
+            elif (partner_signal > 0.08 and
+                  last_other_pred is not None and
+                  last_other_pred.get("predicted_bloom")):
                 # Partner's signal — move toward their predicted position
                 pred["pos"] = move_toward(pred["pos"],
-                                          other_pred["predicted_bloom"],
+                                          last_other_pred["predicted_bloom"],
                                           speed * partner_signal)
             else:
-                # Seek nearest bloom or random walk
                 nb2, _ = nearest_bloom(blooms, pred["pos"])
                 if nb2:
                     pred["pos"] = move_toward(pred["pos"], nb2["pos"], speed)
