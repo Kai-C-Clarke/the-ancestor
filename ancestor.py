@@ -2716,30 +2716,33 @@ FOOD_INTENSITY    = 15.0    # energy available at pulse front
 FOOD_WIDTH        = 0.15    # angular width of pulse ring (radians)
 
 # Entities
-GRAZER_ENERGY_START  = 60.0
-GRAZER_ENERGY_MAX    = 120.0
-GRAZER_DEPLETE       = 0.5
-GRAZER_MOVE_COST     = 0.3
-GRAZER_BREED_THRESH  = 80.0
-GRAZER_BREED_COOL    = 15
-GRAZER_MAX_AGE       = 80
-GRAZER_FOOD_GAIN     = 12.0
-GRAZER_BASE_FREQ     = 0.3   # low frequency — long range beacon
+# Fish-strategy metabolism — broadcast spawning, many offspring, fast cycle
+GRAZER_ENERGY_START  = 30.0   # born small, must find food fast
+GRAZER_ENERGY_MAX    = 80.0
+GRAZER_DEPLETE       = 0.3    # lower base cost — they're small
+GRAZER_MOVE_COST     = 0.2
+GRAZER_BREED_THRESH  = 45.0   # low threshold — breed often
+GRAZER_BREED_COOL    = 5      # short cooldown — fast generations
+GRAZER_MAX_AGE       = 40     # short lives, high turnover
+GRAZER_FOOD_GAIN     = 10.0
+GRAZER_BASE_FREQ     = 0.3
+GRAZER_SPAWN_COUNT   = 8      # broadcast spawning — 8 offspring at once
 
-BROWSER_ENERGY_START = 100.0
-BROWSER_ENERGY_MAX   = 200.0
-BROWSER_DEPLETE      = 1.0
-BROWSER_MOVE_COST    = 0.5
-BROWSER_BREED_THRESH = 120.0
-BROWSER_BREED_COOL   = 20
-BROWSER_MAX_AGE      = 120
-BROWSER_FOOD_GAIN    = 20.0
+BROWSER_ENERGY_START = 60.0
+BROWSER_ENERGY_MAX   = 150.0
+BROWSER_DEPLETE      = 0.7
+BROWSER_MOVE_COST    = 0.4
+BROWSER_BREED_THRESH = 90.0
+BROWSER_BREED_COOL   = 10
+BROWSER_MAX_AGE      = 80
+BROWSER_FOOD_GAIN    = 18.0
 BROWSER_BASE_FREQ    = 0.6
+BROWSER_SPAWN_COUNT  = 4      # fewer offspring than grazers
 
-MAX_GRAZERS    = 30
-MAX_BROWSERS   = 12
-MIN_GRAZERS    = 4
-MIN_BROWSERS   = 2
+MAX_GRAZERS    = 200   # much larger carrying capacity
+MAX_BROWSERS   = 40
+MIN_GRAZERS    = 10
+MIN_BROWSERS   = 4
 
 # Predators
 PRED_SEARCH_FREQ  = 0.15    # low freq for long range scan
@@ -3023,7 +3026,53 @@ def mutate_predator(pred, hungry):
 
 # ── Breeding ───────────────────────────────────────────────────
 
+def broadcast_spawn(parent, cycle, n_offspring=None):
+    """
+    Fish-strategy spawning — single parent releases multiple offspring.
+    No partner required. Energy cost spread across all offspring.
+    Each child inherits mutated genes from parent alone.
+    """
+    entity_type = parent["type"]
+    spawn_count  = n_offspring or (GRAZER_SPAWN_COUNT if entity_type == "grazer" else BROWSER_SPAWN_COUNT)
+    energy_cost  = parent["energy"] * 0.5  # spend half energy on spawn event
+    per_child    = energy_cost / spawn_count * 0.6  # each child gets fraction
+
+    parent["energy"]    -= energy_cost
+    parent["breed_cool"] = GRAZER_BREED_COOL if entity_type == "grazer" else BROWSER_BREED_COOL
+    parent["births"]     = parent.get("births", 0) + spawn_count
+
+    offspring = []
+    for _ in range(spawn_count):
+        # Scatter offspring around parent on sphere
+        spawn_pos = move_toward(parent["pos"], random_point_on_sphere(),
+                                random.uniform(0.05, 0.25))
+
+        # Mutated genes from single parent
+        genes = {
+            "emit_freq":   max(0.05, parent["emit_freq"]   + random.gauss(0, 0.03)),
+            "amplitude":   max(0.05, parent["amplitude"]   + random.gauss(0, 0.02)),
+            "sensitivity": max(0.0,  parent["sensitivity"] + random.gauss(0, 0.02)),
+            "speed":       max(0.005,parent["speed"]       + random.gauss(0, 0.003)),
+        }
+        if "pulse_tune" in parent:
+            genes["pulse_tune"] = max(0, parent["pulse_tune"] + random.gauss(0, 0.03))
+
+        gen = parent["generation"] + 1
+
+        if entity_type == "grazer":
+            child = new_grazer(pos=spawn_pos, energy=per_child,
+                               generation=gen, parent_ids=[parent["id"]], genes=genes)
+        else:
+            child = new_browser(pos=spawn_pos, energy=per_child,
+                                generation=gen, parent_ids=[parent["id"]], genes=genes)
+
+        offspring.append(child)
+
+    return offspring
+
+
 def breed_entities(a, b, cycle):
+    """Legacy sexual reproduction — kept for compatibility."""
     def blend(x, y): return random.choice([x, y]) + random.gauss(0, 0.01)
     genes = {k: blend(a.get(k, 0.5), b.get(k, 0.5))
              for k in ["emit_freq","amplitude","sensitivity","speed"]}
@@ -3313,46 +3362,49 @@ def run_field_cycle(state):
         # Mutate predator
         preds[pid] = mutate_predator(pred, pred["cycles_hungry"])
 
-    # ── Breeding ───────────────────────────────────────────────
+    # ── Broadcast Spawning — fish strategy ────────────────────
     alive_now = {k: v for k, v in entities.items() if v.get("alive", True)}
     grazers   = [(k, v) for k, v in alive_now.items() if v["type"] == "grazer"]
     browsers  = [(k, v) for k, v in alive_now.items() if v["type"] == "browser"]
+    alive_g   = len(grazers)
+    alive_b   = len(browsers)
 
-    def try_breed(population, max_pop, thresh, cool, entity_list):
-        new_entities = []
-        bred = set()
-        if len(population) >= max_pop: return new_entities
-        for i, (id_a, ent_a) in enumerate(population):
-            if id_a in bred: continue
-            if ent_a["energy"] < thresh or ent_a["breed_cool"] > 0: continue
-            for id_b, ent_b in population[i+1:]:
-                if id_b in bred: continue
-                if ent_b["energy"] < thresh or ent_b["breed_cool"] > 0: continue
-                dist = great_circle_distance(ent_a["pos"], ent_b["pos"])
-                if dist < 0.2:
-                    child = breed_entities(ent_a, ent_b, cycle)
-                    new_entities.append(child)
-                    bred.add(id_a); bred.add(id_b)
-                    state["births"] += 1
-                    state["generation"] = max(state["generation"], child["generation"])
-                    state["lineage"][child["id"]] = {
-                        "parents": [id_a, id_b],
-                        "cycle":   cycle,
-                        "generation": child["generation"],
-                    }
-                    moments.append({
-                        "cycle": cycle, "type": "birth",
-                        "child_id": child["id"],
-                        "child_type": child["type"],
-                        "generation": child["generation"],
-                        "child_freq": round(child["emit_freq"], 4),
-                    })
-                    break
-        return new_entities
+    new_offspring = []
+    for eid, entity in list(alive_now.items()):
+        entity_type = entity["type"]
+        max_pop   = MAX_GRAZERS  if entity_type == "grazer" else MAX_BROWSERS
+        thresh    = GRAZER_BREED_THRESH if entity_type == "grazer" else BROWSER_BREED_THRESH
+        cur_pop   = alive_g if entity_type == "grazer" else alive_b
 
-    new_grazers  = try_breed(grazers,  MAX_GRAZERS,  GRAZER_BREED_THRESH,  GRAZER_BREED_COOL,  entities)
-    new_browsers = try_breed(browsers, MAX_BROWSERS, BROWSER_BREED_THRESH, BROWSER_BREED_COOL, entities)
-    for e in new_grazers + new_browsers:
+        if cur_pop >= max_pop: continue
+        if entity["energy"] < thresh: continue
+        if entity.get("breed_cool", 0) > 0: continue
+
+        # Broadcast spawn — no partner needed
+        children = broadcast_spawn(entity, cycle)
+        for child in children:
+            new_offspring.append(child)
+            state["births"] += 1
+            state["generation"] = max(state["generation"], child["generation"])
+            state["lineage"][child["id"]] = {
+                "parents": [eid],
+                "cycle":   cycle,
+                "generation": child["generation"],
+            }
+            moments.append({
+                "cycle":      cycle,
+                "type":       "birth",
+                "child_id":   child["id"],
+                "child_type": child["type"],
+                "generation": child["generation"],
+                "child_freq": round(child["emit_freq"], 4),
+            })
+            if entity_type == "grazer": alive_g += 1
+            else: alive_b += 1
+            if alive_g >= MAX_GRAZERS and entity_type == "grazer": break
+            if alive_b >= MAX_BROWSERS and entity_type == "browser": break
+
+    for e in new_offspring:
         entities[e["id"]] = e
 
     # ── Minimum population ─────────────────────────────────────
