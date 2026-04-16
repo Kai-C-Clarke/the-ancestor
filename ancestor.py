@@ -2705,6 +2705,7 @@ def e_reset():
 # ── Constants ──────────────────────────────────────────────────
 
 F2_DATA_DIR    = "/mnt/data/field"
+_F2_CYCLE_COUNTER = [0]  # in-memory cycle count, survives even if disk fails
 # Fallback to /tmp if persistent disk not mounted
 try:
     os.makedirs(F2_DATA_DIR, exist_ok=True)
@@ -3459,6 +3460,7 @@ def run_field_v2_cycle(state):
     state["entities"] = entities
     state["predators"]= preds
     state["status"]   = "running"
+    _F2_CYCLE_COUNTER[0] = cycle
     try:
         f2_save(f2_state_path(), state)
     except Exception as save_err:
