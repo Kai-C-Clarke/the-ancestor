@@ -2708,9 +2708,13 @@ F2_DATA_DIR    = "/mnt/data/field"
 # Fallback to /tmp if persistent disk not mounted
 try:
     os.makedirs(F2_DATA_DIR, exist_ok=True)
-    open(f"{F2_DATA_DIR}/.write_test","w").close()
-    os.remove(f"{F2_DATA_DIR}/.write_test")
-except Exception:
+    # Verify writable
+    test_f = f"{F2_DATA_DIR}/.write_test"
+    open(test_f,"w").close()
+    os.remove(test_f)
+    logging.info(f"[FIELD2] Data dir writable: {F2_DATA_DIR}")
+except Exception as e:
+    logging.warning(f"[FIELD2] {F2_DATA_DIR} not writable ({e}), falling back to /tmp")
     F2_DATA_DIR = "/tmp/field_data"
     os.makedirs(F2_DATA_DIR, exist_ok=True)
 F2_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
@@ -3455,7 +3459,10 @@ def run_field_v2_cycle(state):
     state["entities"] = entities
     state["predators"]= preds
     state["status"]   = "running"
-    f2_save(f2_state_path(), state)
+    try:
+        f2_save(f2_state_path(), state)
+    except Exception as save_err:
+        logging.error(f"[FIELD2] Save failed cycle {cycle}: {save_err}")
 
     logging.info(
         f"[FIELD2] Cycle {cycle} | G={alive_g} B={alive_b} | "
