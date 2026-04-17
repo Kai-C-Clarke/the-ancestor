@@ -3472,7 +3472,12 @@ def run_field_v2_cycle(state):
     try:
         f2_save(f2_state_path(), state)
     except Exception as save_err:
-        logging.error(f"[FIELD2] Save failed cycle {cycle}: {save_err}")
+        logging.error(f"[FIELD2] Save failed cycle {cycle}: {save_err} — trying /tmp")
+        try:
+            os.makedirs("/tmp/field_data", exist_ok=True)
+            f2_save("/tmp/field_data/state_v2.json", state)
+        except Exception as e2:
+            logging.error(f"[FIELD2] /tmp save also failed: {e2}")
 
     logging.info(
         f"[FIELD2] Cycle {cycle} | G={alive_g} B={alive_b} | "
@@ -3581,11 +3586,15 @@ def fv2_health():
         alive = {k:v for k,v in state.get("entities",{}).items() if v.get("alive",True)}
         g = sum(1 for v in alive.values() if v["type"]=="grazer")
         b = sum(1 for v in alive.values() if v["type"]=="browser")
+        # Use in-memory counter if disk state is stale
+        disk_cycle = state.get("cycle", 0)
+        mem_cycle  = _F2_CYCLE_COUNTER[0]
+        actual_cycle = max(disk_cycle, mem_cycle)
         return jsonify({
             "service":    "the-field-v2",
             "version":    2,
-            "status":     state.get("status","uninitialised"),
-            "cycle":      state.get("cycle",0),
+            "status":     "running" if mem_cycle > 0 else state.get("status","uninitialised"),
+            "cycle":      actual_cycle,
             "max":        F2_MAX_CYCLES,
             "grazers":    g,
             "browsers":   b,
