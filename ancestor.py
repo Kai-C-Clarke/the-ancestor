@@ -2774,7 +2774,7 @@ MIN_BROWSERS         = 5
 # Predators
 PRED_SEARCH_FREQ     = 0.12
 PRED_HUNT_FREQ       = 2.0
-PRED_SWITCH_DIST     = 0.25   # switch to hunt when prey this close
+PRED_SWITCH_DIST     = 0.15   # switch to hunt when prey this close — tighter, less wasted energy
 PRED_DAMAGE          = 20.0
 PRED_SPEED_SEARCH    = 0.035
 PRED_SPEED_HUNT      = 0.085
@@ -3359,7 +3359,7 @@ def run_field_v2_cycle(state):
             if nid not in alive_now: continue
             e = alive_now[nid]
             if not e.get("alive",True): continue
-            if gcd(pred["pos"], e["pos"]) < 0.05:
+            if gcd(pred["pos"], e["pos"]) < 0.12:  # wider kill zone — 0.05 was too small
                 e["energy"] -= pred["damage"]
                 if e["energy"] <= 0:
                     e["alive"] = False
