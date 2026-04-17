@@ -2188,6 +2188,13 @@ def run_eco_cycle(state):
     t        = cycle * 0.1
     alive    = {k: v for k, v in entities.items() if v.get("alive")}
 
+    # Purge dead entities every 100 cycles to prevent memory leak
+    if cycle % 100 == 0 and len(entities) > len(alive) + 20:
+        n_purged = len(entities) - len(alive)
+        state["entities"] = {k: v for k, v in entities.items() if v.get("alive")}
+        entities = state["entities"]
+        logging.info(f"[ECO] Purged {n_purged} dead entities at cycle {cycle}")
+
     log_path     = f"{E_DATA_DIR}/log.json"
     corpus_path  = f"{E_DATA_DIR}/corpus.json"
     moments_path = f"{E_DATA_DIR}/moments.json"
