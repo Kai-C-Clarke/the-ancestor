@@ -3491,6 +3491,31 @@ def run_field_v2_cycle(state):
 
 # ── Experiment Loop ────────────────────────────────────────────
 
+def f2_lock_path():  return f"{F2_DATA_DIR}/.field_running"
+
+def f2_acquire_lock():
+    """Write a lock file — persists across restarts."""
+    try:
+        with open(f2_lock_path(), 'w') as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception as e:
+        logging.error(f"[FIELD2] Lock acquire failed: {e}")
+        return False
+
+def f2_release_lock():
+    """Remove the lock file."""
+    try:
+        if os.path.exists(f2_lock_path()):
+            os.remove(f2_lock_path())
+    except Exception as e:
+        logging.error(f"[FIELD2] Lock release failed: {e}")
+
+def f2_is_locked():
+    """Check if lock file exists."""
+    return os.path.exists(f2_lock_path())
+
+
 def run_field_v2():
     def loop():
         try:
@@ -3500,6 +3525,7 @@ def run_field_v2():
             logging.info(f"[FIELD2] State loaded: cycle={state['cycle']} status={state['status']}")
             if state["cycle"] >= F2_MAX_CYCLES:
                 logging.info("[FIELD2] Already complete")
+                f2_release_lock()
                 return
             state["status"] = "running"
             f2_save(f2_state_path(), state)
@@ -3516,9 +3542,11 @@ def run_field_v2():
                 time.sleep(F2_CYCLE_DELAY)
             if state["cycle"] >= F2_MAX_CYCLES:
                 state["status"] = "complete"; f2_save(f2_state_path(), state)
+            f2_release_lock()
         except Exception as e:
             logging.error(f"[FIELD2] Loop crashed: {e}")
             import traceback; traceback.print_exc()
+            f2_release_lock()
     t = Thread(target=loop, daemon=True)
     t.start()
     logging.info(f"[FIELD2] Thread launched: {t.ident}")
@@ -3594,6 +3622,7 @@ def fv2_health():
             "service":    "the-field-v2",
             "version":    2,
             "status":     "running" if mem_cycle > 0 else state.get("status","uninitialised"),
+            "locked":     f2_is_locked(),
             "cycle":      actual_cycle,
             "max":        F2_MAX_CYCLES,
             "grazers":    g,
@@ -3707,13 +3736,17 @@ def fv2_log():
 def fv2_start():
     if request.args.get("key") != F2_WRITE_KEY:
         return jsonify({"error":"Unauthorised"}), 401
-    # Guard against duplicate threads
+    # Guard against duplicate threads — check both in-memory counter AND disk lock
     if _F2_CYCLE_COUNTER[0] > 0:
-        return jsonify({"error": "Already running", "cycle": _F2_CYCLE_COUNTER[0]}), 409
+        return jsonify({"error": "Already running (memory)", "cycle": _F2_CYCLE_COUNTER[0]}), 409
+    if f2_is_locked():
+        return jsonify({"error": "Already running (lock file) — call /field/reset to clear"}), 409
 
     state = f2_init_state()
     f2_save(f2_state_path(), state)
     _F2_CYCLE_COUNTER[0] = 0
+    if not f2_acquire_lock():
+        return jsonify({"error": "Could not acquire lock"}), 500
     run_field_v2()
     return jsonify({
         "status":    "started",
@@ -3733,6 +3766,7 @@ def fv2_reset():
         try: os.remove(f"{F2_DATA_DIR}/{fname}")
         except: pass
     _F2_CYCLE_COUNTER[0] = 0  # reset in-memory counter
+    f2_release_lock()          # clear persistent lock
     return jsonify({"status":"reset","version":2})
 
 
