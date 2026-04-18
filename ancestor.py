@@ -3707,8 +3707,13 @@ def fv2_log():
 def fv2_start():
     if request.args.get("key") != F2_WRITE_KEY:
         return jsonify({"error":"Unauthorised"}), 401
+    # Guard against duplicate threads
+    if _F2_CYCLE_COUNTER[0] > 0:
+        return jsonify({"error": "Already running", "cycle": _F2_CYCLE_COUNTER[0]}), 409
+
     state = f2_init_state()
     f2_save(f2_state_path(), state)
+    _F2_CYCLE_COUNTER[0] = 0
     run_field_v2()
     return jsonify({
         "status":    "started",
@@ -3727,6 +3732,7 @@ def fv2_reset():
     for fname in ["state_v2.json","log_v2.json","corpus_v2.json","moments_v2.json"]:
         try: os.remove(f"{F2_DATA_DIR}/{fname}")
         except: pass
+    _F2_CYCLE_COUNTER[0] = 0  # reset in-memory counter
     return jsonify({"status":"reset","version":2})
 
 
