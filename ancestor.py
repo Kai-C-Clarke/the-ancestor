@@ -2936,7 +2936,7 @@ def food_at(blooms, pos):
         if dist < BLOOM_RADIUS:
             intensity = 1.0 - dist/BLOOM_RADIUS
             age_factor = max(0.0, 1.0 - b["age"]/BLOOM_LIFETIME)
-            total += BLOOM_ENERGY_MAX * intensity * age_factor * 0.15
+            total += BLOOM_ENERGY_MAX * intensity * age_factor * 0.4  # raised from 0.15 — grazers need to thrive not just survive
     return total
 
 def nearest_bloom(blooms, pos):
