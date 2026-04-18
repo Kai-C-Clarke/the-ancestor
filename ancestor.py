@@ -2738,8 +2738,8 @@ LAT_BANDS      = 16          # latitude divisions
 N_BLOOMS           = 4       # simultaneous blooms
 BLOOM_SPEED        = 0.018   # radians/cycle — fast enough to force chase
 BLOOM_DRIFT        = 0.003   # random direction change per cycle
-BLOOM_RADIUS       = 0.10    # angular radius of bloom
-BLOOM_ENERGY_MAX   = 40.0    # energy per entity per cycle inside bloom
+BLOOM_RADIUS       = 0.12    # angular radius — slightly wider
+BLOOM_ENERGY_MAX   = 80.0    # raised — grazers were starving even on bloom
 BLOOM_LIFETIME     = 400     # cycles before bloom fades
 BLOOM_SPAWN_INT    = 80      # cycles between new bloom spawns
 
@@ -2748,14 +2748,14 @@ GRAZER_ENERGY_START  = 30.0
 GRAZER_ENERGY_MAX    = 90.0
 GRAZER_DEPLETE       = 0.25
 GRAZER_MOVE_COST     = 0.15
-GRAZER_BREED_THRESH  = 50.0
+GRAZER_BREED_THRESH  = 40.0  # lowered — easier to reach breeding condition
 GRAZER_BREED_COOL    = 4
 GRAZER_MAX_AGE       = 50
-GRAZER_FOOD_GAIN     = 15.0
+GRAZER_FOOD_GAIN     = 20.0  # raised food gain per bloom contact
 GRAZER_SPAWN_COUNT   = 10    # broadcast spawn
 GRAZER_BASE_FREQ     = 0.3
 MAX_GRAZERS          = 3000  # schooling threshold
-MIN_GRAZERS          = 20
+MIN_GRAZERS          = 50    # raised minimum — predators need more prey
 
 # Browsers
 BROWSER_ENERGY_START = 70.0
