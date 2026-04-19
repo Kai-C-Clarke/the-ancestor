@@ -3080,8 +3080,8 @@ def predict_bloom(pred):
         return pred
 
     # Vector from oldest to newest position in window
-    oldest_pos = recent[0][1]
-    newest_pos = recent[-1][1]
+    oldest_pos = tuple(recent[0][1])  # JSON may load as list
+    newest_pos = tuple(recent[-1][1])
     n_steps    = len(recent) - 1
 
     # Measure consistency — how much does the path vary?
@@ -3270,10 +3270,12 @@ def run_field_v2_cycle(state):
             pred["energy"] = PRED_ENERGY_START * 0.5
             pred["age"]    = 0
             # Respawn near last known bloom position if memory exists
-            # — don't waste the trajectory knowledge
             if pred.get("predicted_bloom"):
-                pred["pos"] = move_toward(
-                    random_point(), pred["predicted_bloom"], 0.3)
+                try:
+                    pb = tuple(pred["predicted_bloom"])  # JSON loads as list
+                    pred["pos"] = move_toward(random_point(), pb, 0.3)
+                except Exception:
+                    pred["pos"] = random_point()
             else:
                 pred["pos"] = random_point()
             # Keep bloom_memory — trajectory knowledge survives starvation
