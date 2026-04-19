@@ -3269,8 +3269,15 @@ def run_field_v2_cycle(state):
         if pred["energy"] <= 0 or pred["age"] >= PRED_MAX_AGE:
             pred["energy"] = PRED_ENERGY_START * 0.5
             pred["age"]    = 0
-            pred["pos"]    = random_point()
-            pred["bloom_memory"] = []
+            # Respawn near last known bloom position if memory exists
+            # — don't waste the trajectory knowledge
+            if pred.get("predicted_bloom"):
+                pred["pos"] = move_toward(
+                    random_point(), pred["predicted_bloom"], 0.3)
+            else:
+                pred["pos"] = random_point()
+            # Keep bloom_memory — trajectory knowledge survives starvation
+            pred["cycles_hungry"] = 0
             continue
 
         # Update bloom trajectory memory
