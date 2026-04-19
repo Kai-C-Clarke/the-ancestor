@@ -2217,7 +2217,7 @@ def run_eco_cycle(state):
         for eid, entity in list(alive.items()):
             dist = abs(pred["position"] - entity["position"])
             if dist <= pred["attack_dist"]:
-                alive[eid]["energy"] -= pred["damage"]
+                alive[eid]["energy"] -= pred.get("damage", PRED_DAMAGE)
                 if alive[eid]["energy"] <= 0:
                     alive[eid]["alive"] = False
                     pred["kills"] += 1
@@ -3008,6 +3008,7 @@ def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
         "kills":        0,
         "cycles_hungry":0,
         "last_kill":    0,
+        "damage":       PRED_DAMAGE,
         # Trajectory memory — rolling window of bloom positions
         "bloom_memory": [],          # list of (cycle, pos) tuples
         "memory_len":   PRED_MEMORY_LEN,
@@ -3272,8 +3273,9 @@ def run_field_v2_cycle(state):
             # Respawn near last known bloom position if memory exists
             if pred.get("predicted_bloom"):
                 try:
-                    pb = tuple(pred["predicted_bloom"])  # JSON loads as list
-                    pred["pos"] = move_toward(random_point(), pb, 0.3)
+                    pb = tuple(float(x) for x in pred["predicted_bloom"])
+                    rp = random_point()
+                    pred["pos"] = move_toward(rp, pb, 0.3)
                 except Exception:
                     pred["pos"] = random_point()
             else:
