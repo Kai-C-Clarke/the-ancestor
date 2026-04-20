@@ -3325,60 +3325,64 @@ def run_field_v2_cycle(state):
             history.append((cycle, other_pred["pos"], other_pred.get("speed_hunt", PRED_SPEED_HUNT)))
             pred["partner_pos_history"] = history[-20:]  # 20-cycle rolling window
 
-            # Need at least 4 observations to detect acceleration
-            if len(pred["partner_pos_history"]) < 4:
+            # Need at least 6 observations to detect directional consistency
+            if len(pred["partner_pos_history"]) < 6:
                 continue
 
-            # Measure partner's recent displacement (last 3 vs previous 3)
-            recent   = pred["partner_pos_history"][-3:]
-            previous = pred["partner_pos_history"][-6:-3]
-            if len(previous) < 3:
+            history = pred["partner_pos_history"]
+
+            # Compute step-by-step unit direction vectors over the history window
+            # A partner moving consistently toward a region is informative
+            # even without acceleration — sustained direction is the signal
+            steps = []
+            for i in range(len(history) - 1):
+                p0 = history[i][1]
+                p1 = history[i+1][1]
+                dv = tuple(p1[j] - p0[j] for j in range(3))
+                mag = math.sqrt(sum(x*x for x in dv))
+                if mag > 1e-8:
+                    steps.append(tuple(x/mag for x in dv))
+
+            if len(steps) < 5:
                 continue
 
-            # Mean positions
-            def mean_pos(entries):
-                xs = [p[1][0] for p in entries]
-                ys = [p[1][1] for p in entries]
-                zs = [p[1][2] for p in entries]
-                n  = len(entries)
-                return (sum(xs)/n, sum(ys)/n, sum(zs)/n)
+            # Directional consistency: dot product of consecutive step directions
+            # If consistently > 0.6 across last 5 steps, partner is tracking something
+            recent_steps = steps[-5:]
+            consistency_scores = []
+            for i in range(len(recent_steps) - 1):
+                dot = sum(recent_steps[i][j] * recent_steps[i+1][j] for j in range(3))
+                consistency_scores.append(dot)
 
-            pos_prev   = mean_pos(previous)
-            pos_recent = mean_pos(recent)
-            displacement = gcd(pos_prev, pos_recent)
+            mean_consistency = sum(consistency_scores) / len(consistency_scores)
 
-            # Speed of recent movement
-            t_span = recent[-1][0] - previous[0][0]
-            if t_span < 1: continue
-            velocity = displacement / t_span
+            # Straightness: net displacement / total path length
+            pos_start = history[-6][1]
+            pos_end   = history[-1][1]
+            net_disp  = gcd(pos_start, pos_end)
+            path_len  = sum(gcd(history[i][1], history[i+1][1]) for i in range(len(history)-6, len(history)-1))
+            straightness = net_disp / max(path_len, 1e-8)
 
-            # Is partner accelerating? Compare to partner's baseline search speed
-            baseline = other_pred.get("speed_search", PRED_SPEED_SEARCH)
-            accel_ratio = velocity / max(baseline, 0.001)
-
-            # Sustained acceleration (>1.8× baseline) = inferred interest
-            if accel_ratio > 1.8:
-                # Project: where is partner heading?
-                # Extrapolate from pos_prev → pos_recent, one step further
-                delta = tuple(pos_recent[i] - pos_prev[i] for i in range(3))
+            # Partner is "interested" if moving consistently toward something
+            if mean_consistency > 0.6 and straightness > 0.5 and net_disp > 0.02:
+                delta = tuple(pos_end[i] - pos_start[i] for i in range(3))
                 mag   = math.sqrt(sum(d*d for d in delta))
                 if mag > 1e-6:
-                    unit    = tuple(d/mag for d in delta)
-                    inferred = norm(tuple(pos_recent[i] + unit[i]*0.15 for i in range(3)))
-                    # Signal strength decays with distance to partner
+                    unit     = tuple(d/mag for d in delta)
+                    inferred = norm(tuple(pos_end[i] + unit[i]*0.2 for i in range(3)))
                     p_dist       = gcd(pred["pos"], other_pred["pos"])
-                    partner_draw = pred.get("partner_obs_weight", 0.0) * math.exp(-0.5 * p_dist)
+                    partner_draw = pred.get("partner_obs_weight", 0.15) * math.exp(-0.3 * p_dist)
                     partner_inferred = inferred
 
-                    # Log as an event only when draw is strong enough to act on
-                    if partner_draw > 0.08:
+                    if partner_draw > 0.05:
                         state["signal_events"].append({
-                            "cycle":     cycle,
-                            "receiver":  pid,
-                            "sender":    other_pid,
-                            "strength":  round(partner_draw, 3),
-                            "accel":     round(accel_ratio, 2),
-                            "inferred":  True,   # spatial inference, not state read
+                            "cycle":       cycle,
+                            "receiver":    pid,
+                            "sender":      other_pid,
+                            "strength":    round(partner_draw, 3),
+                            "consistency": round(mean_consistency, 2),
+                            "straight":    round(straightness, 2),
+                            "inferred":    True,
                         })
                         state["signal_events"] = state["signal_events"][-200:]
 
