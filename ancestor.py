@@ -3017,7 +3017,7 @@ def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
         "prediction_conf": 0.0,      # confidence 0-1
         # Communication
         "partner_pos_history": [],     # rolling window of (cycle, pos, speed) for partner
-        "partner_obs_weight":  0.0,   # evolves: how much partner movement informs us
+        "partner_obs_weight":  0.15,  # evolves: how much partner movement informs us (non-zero start so pathway is active)
         "inferred_interest":   None,  # destination inferred from partner acceleration
         "mutation_rate": 0.06,
     }
@@ -3401,6 +3401,7 @@ def run_field_v2_cycle(state):
                 # Spatial inference: partner appears to be accelerating toward a region.
                 # Move toward inferred destination, weighted by observation confidence.
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * partner_draw)
+                pred["_acted_on_inference"] = True  # flag for post-kill reinforcement
             else:
                 nb2, _ = nearest_bloom(blooms, pred["pos"])
                 if nb2:
@@ -3438,11 +3439,21 @@ def run_field_v2_cycle(state):
                         "predator": pid, "pred_mode": pred["mode"],
                         "pred_conf": round(pred.get("prediction_conf",0),3),
                     })
+                    # Reinforce partner_obs_weight if inference led here
+                    if pred.pop("_acted_on_inference", False):
+                        pred["partner_obs_weight"] = min(1.0,
+                            pred.get("partner_obs_weight", 0.15) + 0.04)
                     entities[nid] = e
                     break
 
         if not killed:
             pred["cycles_hungry"] += 1
+            # Clear inference flag without reward
+            pred.pop("_acted_on_inference", None)
+            # Mild decay if inference was available but produced no kill over time
+            if pred["cycles_hungry"] > 0 and pred["cycles_hungry"] % 20 == 0:
+                pred["partner_obs_weight"] = max(0.0,
+                    pred.get("partner_obs_weight", 0.15) - 0.01)
 
         preds[pid] = mutate_predator(pred, pred["cycles_hungry"])
 
