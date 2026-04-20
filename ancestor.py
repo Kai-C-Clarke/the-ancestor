@@ -3406,13 +3406,16 @@ def run_field_v2_cycle(state):
                 continue
 
             # Detect speed discontinuity: last 2 cycles vs previous 2
-            # Filter out teleport artefacts (accel > 100x = respawn)
+            # Filter out teleport artefacts (accel > 50x = respawn)
             baseline  = sum(recent_speeds[-4:-2]) / 2
             current   = sum(recent_speeds[-2:])   / 2
             accel_ratio = current / max(baseline, 1e-6)
 
-            # Hunt-mode acceleration is ~2.4x search speed. Ignore teleport spikes.
-            if 1.6 < accel_ratio < 50 and current > PRED_SPEED_SEARCH * 1.2:
+            # Actual field speeds average ~0.018 rad/cycle (not the constant 0.035).
+            # Signal fires when partner is moving 40%+ faster than their recent baseline,
+            # AND current speed is meaningfully above noise (~0.01 rad/cycle minimum).
+            # Upper bound filters respawn teleports.
+            if 1.4 < accel_ratio < 50 and current > 0.015:
                 # Partner found prey and surged. Extrapolate where they're heading.
                 pos_prev = history[-3][1]
                 pos_now  = history[-1][1]
@@ -3420,8 +3423,9 @@ def run_field_v2_cycle(state):
                 mag   = math.sqrt(sum(d*d for d in delta))
                 if mag > 1e-6:
                     unit     = tuple(d/mag for d in delta)
-                    # Project 0.1 rad ahead — where prey likely still is
-                    inferred = norm(tuple(pos_now[j] + unit[j]*0.1 for j in range(3)))
+                    # Project 0.15 rad ahead — where prey cluster is, not just where A was
+                    # Prey scatter slightly; B needs to arrive at the zone, not the exact point
+                    inferred = norm(tuple(pos_now[j] + unit[j]*0.15 for j in range(3)))
                     p_dist       = gcd(pred["pos"], other_pred["pos"])
                     # Single distance decay — kin_factor is duty only, no double decay
                     partner_draw = (pred.get("partner_obs_weight", 0.15)
