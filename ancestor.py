@@ -3474,9 +3474,11 @@ def run_field_v2_cycle(state):
                 else:
                     pred["pos"] = move_toward(pred["pos"], target,
                                               speed * pred["prediction_conf"])
-            elif partner_inferred is not None and partner_draw > 0.08:
-                # Sighted predator following partner as fallback
-                pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * partner_draw)
+            elif partner_inferred is not None and partner_draw > 0.03:
+                # Sighted predator following partner — threshold lowered because
+                # species-band recognition already filtered out prey/noise.
+                # Only a verified conspecific surge reaches this branch.
+                pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 3))
                 pred["_acted_on_inference"] = True
             else:
                 nb2, _ = nearest_bloom(blooms, pred["pos"])
@@ -3526,10 +3528,10 @@ def run_field_v2_cycle(state):
             pred["cycles_hungry"] += 1
             # Clear inference flag without reward
             pred.pop("_acted_on_inference", None)
-            # Mild decay if inference produced no kill over time — but never to zero
-            # Floor at 0.05 so a bloom-blind predator never stops observing entirely
+            # Mild decay if inference produced no kill — floor prevents complete disengagement.
+            # Both sighted and blind predators maintain a minimum attentiveness to conspecifics.
             if pred["cycles_hungry"] > 0 and pred["cycles_hungry"] % 20 == 0:
-                floor = 0.05 if pred.get("memory_len", PRED_MEMORY_LEN) == 0 else 0.0
+                floor = 0.05  # same floor for both — nobody stops watching their kin
                 pred["partner_obs_weight"] = max(floor,
                     pred.get("partner_obs_weight", 0.15) - 0.01)
 
