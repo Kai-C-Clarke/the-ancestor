@@ -3463,21 +3463,37 @@ def run_field_v2_cycle(state):
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 2))
                 pred["_acted_on_inference"] = True
             elif not bloom_blind and pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
-                # Move toward predicted bloom — but perturb slightly to search the
-                # neighbourhood rather than homing to a point. Prey cluster at
-                # bloom edges, not the centre. Small random walk near the target.
+                # Ambush strategy: position at bloom EDGE, not centre.
+                # Grazers approach bloom to feed. If predator is at centre,
+                # grazers detect it (flee radius 0.35 rad) and avoid the bloom entirely.
+                # By waiting at the edge (BLOOM_RADIUS * 2 away), the predator
+                # stays outside most grazers' awareness, then sprints inward when
+                # grazers cluster at the bloom centre.
                 target = pred["predicted_bloom"]
                 dist_to_target = gcd(pred["pos"], target)
-                if dist_to_target < BLOOM_RADIUS * 1.5:
-                    # We're already near the bloom — orbit/patrol rather than converge
-                    pred["pos"] = random_walk(pred["pos"], speed * 0.8)
-                else:
+                ambush_dist = BLOOM_RADIUS * 2.0  # wait here — outside flee detection
+                if dist_to_target < ambush_dist * 0.5:
+                    # Too close — drifted into bloom. Back off to ambush position.
+                    away_raw = tuple(pred["pos"][i] - target[i] for i in range(3))
+                    away_mag  = math.sqrt(sum(x*x for x in away_raw))
+                    if away_mag < 1e-8:
+                        # Exactly at target — pick a random escape direction
+                        away = random_point()
+                    else:
+                        away = tuple(x/away_mag for x in away_raw)
+                    ambush_pos = norm(tuple(target[i] + away[i] * ambush_dist for i in range(3)))
+                    pred["pos"] = move_toward(pred["pos"], ambush_pos, speed)
+                elif dist_to_target > ambush_dist * 1.5:
+                    # Too far — approach to ambush position
                     pred["pos"] = move_toward(pred["pos"], target,
                                               speed * pred["prediction_conf"])
+                else:
+                    # At ambush position — slow patrol along the bloom edge
+                    pred["pos"] = random_walk(pred["pos"], speed * 0.5)
             elif partner_inferred is not None and partner_draw > 0.03:
-                # Sighted predator following partner — threshold lowered because
-                # species-band recognition already filtered out prey/noise.
-                # Only a verified conspecific surge reaches this branch.
+                # Sighted predator following partner — species-band recognition
+                # already filtered out prey/noise. Only a verified conspecific
+                # surge reaches this branch.
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 3))
                 pred["_acted_on_inference"] = True
             else:
