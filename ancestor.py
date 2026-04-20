@@ -3045,9 +3045,13 @@ def mutate_predator(pred, hungry):
     p["speed_search"]         = mg(p["speed_search"],         rate,    0.003,0.01,0.09)
     p["speed_hunt"]           = mg(p["speed_hunt"],           rate*0.5,0.003,0.02,0.14)
     p["partner_obs_weight"]   = mg(p["partner_obs_weight"],   rate*0.3,0.02, 0.0, 1.0)
-    p["memory_len"]           = int(max(5, min(100,
-        p.get("memory_len", PRED_MEMORY_LEN) + (random.gauss(0,2) if random.random()<rate else 0)
-    )))
+    # Preserve bloom-blindness: if memory_len was 0, keep it 0
+    if p.get("memory_len", PRED_MEMORY_LEN) == 0:
+        p["memory_len"] = 0
+    else:
+        p["memory_len"] = int(max(5, min(100,
+            p.get("memory_len", PRED_MEMORY_LEN) + (random.gauss(0,2) if random.random()<rate else 0)
+        )))
     return p
 
 
@@ -3158,6 +3162,13 @@ def f2_init_state():
     pred_b   = new_predator(
         pos=sph2xyz(math.pi, math.pi/2), pid="predator_b",
         sensitivity=0.35, speed=0.05)
+    # B is bloom-blind: no trajectory memory, cannot predict bloom movement.
+    # Its only route to food is reading A's movement in the shared field.
+    pred_b["memory_len"]        = 0      # never accumulates bloom trajectory
+    pred_b["bloom_memory"]      = []
+    pred_b["predicted_bloom"]   = None
+    pred_b["prediction_conf"]   = 0.0
+    pred_b["partner_obs_weight"]= 0.35   # inference is B's primary sense
     return {
         "cycle":      0,
         "status":     "initialised",
@@ -3397,15 +3408,18 @@ def run_field_v2_cycle(state):
             pred["mode"]     = "search"
             pred["emit_freq"]= PRED_SEARCH_FREQ
             speed            = pred["speed_search"]
-            # Use prediction to move toward anticipated bloom position
-            if pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
+            bloom_blind = pred.get("memory_len", PRED_MEMORY_LEN) == 0
+            # Bloom-blind predators: inference is primary navigation, not fallback
+            if bloom_blind and partner_inferred is not None and partner_draw > 0.05:
+                pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 2))
+                pred["_acted_on_inference"] = True
+            elif not bloom_blind and pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
                 pred["pos"] = move_toward(pred["pos"], pred["predicted_bloom"],
                                           speed * pred["prediction_conf"])
             elif partner_inferred is not None and partner_draw > 0.08:
-                # Spatial inference: partner appears to be accelerating toward a region.
-                # Move toward inferred destination, weighted by observation confidence.
+                # Sighted predator following partner as fallback
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * partner_draw)
-                pred["_acted_on_inference"] = True  # flag for post-kill reinforcement
+                pred["_acted_on_inference"] = True
             else:
                 nb2, _ = nearest_bloom(blooms, pred["pos"])
                 if nb2:
