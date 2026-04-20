@@ -2714,6 +2714,7 @@ def e_reset():
 
 F2_DATA_DIR    = "/mnt/data/field"
 _F2_CYCLE_COUNTER = [0]  # in-memory cycle count, survives even if disk fails
+_F2_LIVE_STATE    = [None]  # in-memory live state — updated every cycle, no disk I/O
 # Fallback to /tmp if persistent disk not mounted
 try:
     os.makedirs(F2_DATA_DIR, exist_ok=True)
@@ -2729,6 +2730,7 @@ except Exception as e:
 F2_WRITE_KEY   = os.environ.get("ANCESTOR_KEY", "ancestor-2026")
 F2_MAX_CYCLES  = int(os.environ.get("F_MAX_CYCLES", 10000))
 F2_CYCLE_DELAY = float(os.environ.get("F_CYCLE_DELAY", 1.0))
+F2_SAVE_EVERY  = 10   # write full state to disk every N cycles, not every cycle
 
 # Spatial grid
 LAT_BANDS      = 16          # latitude divisions
@@ -3365,18 +3367,16 @@ def run_field_v2_cycle(state):
             # ── Species recognition via identity frequency ──
             # Only respond to emitters in the predator band.
             # Pulse duty cycle modulates effective signal strength:
-            # a predator with longer duty (more sustained emission) is
-            # easier to locate. This is individual variation, not mode.
-            other_id_freq = other_pred.get("id_freq", PRED_ID_BAND_LO + 0.05)
+            # Guard against stale state (pre-identity runs loaded from disk).
+            # Use 'or' so that None (missing key with explicit None value) also
+            # falls back to the default — not just absent keys.
+            other_id_freq = other_pred.get("id_freq") or (PRED_ID_BAND_LO + 0.05)
             in_species_band = PRED_ID_BAND_LO <= other_id_freq <= PRED_ID_BAND_HI
             if not in_species_band:
                 continue  # not my kind — ignore
 
-            # Duty cycle affects detectability: longer pulses are easier to locate.
-            # kin_factor is purely duty-based — no distance decay here.
-            # Distance decay applied once in partner_draw, not twice.
-            other_duty = other_pred.get("emit_duty", 0.5)
-            kin_factor = other_duty  # identity clarity: longer pulses = clearer signal
+            other_duty = other_pred.get("emit_duty") or 0.5
+            kin_factor = other_duty  # longer pulses = clearer identity signal
 
             # Individual recognition: how similar is the partner's id_freq to
             # what we've learned to track? For now both predators know each other
@@ -3583,6 +3583,17 @@ def run_field_v2_cycle(state):
     for _ in range(max(0, MIN_BROWSERS - alive_b)):
         b = new_browser(); entities[b["id"]] = b
 
+    # ── Purge dead entities every 50 cycles ────────────────────
+    # Without purging, the entities dict grows to tens of thousands of dead
+    # entries (one per historical birth), slowing every iteration.
+    if cycle % 50 == 0:
+        before = len(entities)
+        entities = {k: v for k, v in entities.items() if v.get("alive", True)}
+        state["entities"] = entities
+        purged = before - len(entities)
+        if purged > 0:
+            logging.info(f"[FIELD2] Purged {purged} dead entities at cycle {cycle}, {len(entities)} remain")
+
     # ── Save corpus ────────────────────────────────────────────
     corpus = f2_load(f2_corpus_path(), [])
     corpus.extend(corpus_entries)
@@ -3623,15 +3634,19 @@ def run_field_v2_cycle(state):
     state["predators"]= preds
     state["status"]   = "running"
     _F2_CYCLE_COUNTER[0] = cycle
-    try:
-        f2_save(f2_state_path(), state)
-    except Exception as save_err:
-        logging.error(f"[FIELD2] Save failed cycle {cycle}: {save_err} — trying /tmp")
+    # Write full state to disk every N cycles — not every cycle.
+    # At 3000 entities, serialising every cycle causes I/O stalls.
+    # In-memory state is always current; disk is for crash recovery only.
+    if cycle % F2_SAVE_EVERY == 0:
         try:
-            os.makedirs("/tmp/field_data", exist_ok=True)
-            f2_save("/tmp/field_data/state_v2.json", state)
-        except Exception as e2:
-            logging.error(f"[FIELD2] /tmp save also failed: {e2}")
+            f2_save(f2_state_path(), state)
+        except Exception as save_err:
+            logging.error(f"[FIELD2] Save failed cycle {cycle}: {save_err} — trying /tmp")
+            try:
+                os.makedirs("/tmp/field_data", exist_ok=True)
+                f2_save("/tmp/field_data/state_v2.json", state)
+            except Exception as e2:
+                logging.error(f"[FIELD2] /tmp save also failed: {e2}")
 
     logging.info(
         f"[FIELD2] Cycle {cycle} | G={alive_g} B={alive_b} | "
