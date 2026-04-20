@@ -3016,7 +3016,9 @@ def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
         "predicted_bloom": None,     # where we think bloom will be next
         "prediction_conf": 0.0,      # confidence 0-1
         # Communication
-        "partner_signal_weight": 0.0,  # evolves from 0
+        "partner_pos_history": [],     # rolling window of (cycle, pos, speed) for partner
+        "partner_obs_weight":  0.0,   # evolves: how much partner movement informs us
+        "inferred_interest":   None,  # destination inferred from partner acceleration
         "mutation_rate": 0.06,
     }
 
@@ -3042,7 +3044,7 @@ def mutate_predator(pred, hungry):
     p["sensitivity"]          = mg(p["sensitivity"],          rate,    0.03, 0.1, 2.0)
     p["speed_search"]         = mg(p["speed_search"],         rate,    0.003,0.01,0.09)
     p["speed_hunt"]           = mg(p["speed_hunt"],           rate*0.5,0.003,0.02,0.14)
-    p["partner_signal_weight"]= mg(p["partner_signal_weight"],rate*0.3,0.02, 0.0, 1.0)
+    p["partner_obs_weight"]   = mg(p["partner_obs_weight"],   rate*0.3,0.02, 0.0, 1.0)
     p["memory_len"]           = int(max(5, min(100,
         p.get("memory_len", PRED_MEMORY_LEN) + (random.gauss(0,2) if random.random()<rate else 0)
     )))
@@ -3309,30 +3311,78 @@ def run_field_v2_cycle(state):
                 nearest_dist = dist
                 nearest_prey = e
 
-        # Partner signal — does memory-weighted signal inform movement?
-        partner_signal = 0.0
-        last_other_pred = None
+        # ── Partner spatial observation ─────────────────────────
+        # No telepathy. Each predator observes only where the other IS and was.
+        # Infer interest from acceleration: rapid movement toward a region
+        # suggests prey is there. No internal state is shared — only position history.
+        partner_inferred = None
+        partner_draw     = 0.0
         for other_pid, other_pred in preds.items():
-            last_other_pred = other_pred  # track for use after loop
             if other_pid == pid: continue
-            prev_mode = prev_modes.get(other_pid,"search")
-            curr_mode = other_pred.get("mode","search")
-            if prev_mode == "search" and curr_mode == "hunt":
-                # Partner switched — signal weighted by their prediction confidence
-                conf    = other_pred.get("prediction_conf", 0.0)
-                p_dist  = gcd(pred["pos"], other_pred["pos"])
-                # Signal strength = partner_signal_weight × prediction_confidence
-                partner_signal = (pred["partner_signal_weight"] * conf *
-                                  math.exp(-0.4 * p_dist))
-                if partner_signal > 0.08:
-                    state["signal_events"].append({
-                        "cycle":    cycle,
-                        "receiver": pid,
-                        "sender":   other_pid,
-                        "strength": round(partner_signal, 3),
-                        "conf":     round(conf, 3),
-                    })
-                    state["signal_events"] = state["signal_events"][-200:]
+
+            # Record partner's current position into our observation buffer
+            history = pred.get("partner_pos_history", [])
+            history.append((cycle, other_pred["pos"], other_pred.get("speed_hunt", PRED_SPEED_HUNT)))
+            pred["partner_pos_history"] = history[-20:]  # 20-cycle rolling window
+
+            # Need at least 4 observations to detect acceleration
+            if len(pred["partner_pos_history"]) < 4:
+                continue
+
+            # Measure partner's recent displacement (last 3 vs previous 3)
+            recent   = pred["partner_pos_history"][-3:]
+            previous = pred["partner_pos_history"][-6:-3]
+            if len(previous) < 3:
+                continue
+
+            # Mean positions
+            def mean_pos(entries):
+                xs = [p[1][0] for p in entries]
+                ys = [p[1][1] for p in entries]
+                zs = [p[1][2] for p in entries]
+                n  = len(entries)
+                return (sum(xs)/n, sum(ys)/n, sum(zs)/n)
+
+            pos_prev   = mean_pos(previous)
+            pos_recent = mean_pos(recent)
+            displacement = gcd(pos_prev, pos_recent)
+
+            # Speed of recent movement
+            t_span = recent[-1][0] - previous[0][0]
+            if t_span < 1: continue
+            velocity = displacement / t_span
+
+            # Is partner accelerating? Compare to partner's baseline search speed
+            baseline = other_pred.get("speed_search", PRED_SPEED_SEARCH)
+            accel_ratio = velocity / max(baseline, 0.001)
+
+            # Sustained acceleration (>1.8× baseline) = inferred interest
+            if accel_ratio > 1.8:
+                # Project: where is partner heading?
+                # Extrapolate from pos_prev → pos_recent, one step further
+                delta = tuple(pos_recent[i] - pos_prev[i] for i in range(3))
+                mag   = math.sqrt(sum(d*d for d in delta))
+                if mag > 1e-6:
+                    unit    = tuple(d/mag for d in delta)
+                    inferred = norm(tuple(pos_recent[i] + unit[i]*0.15 for i in range(3)))
+                    # Signal strength decays with distance to partner
+                    p_dist       = gcd(pred["pos"], other_pred["pos"])
+                    partner_draw = pred.get("partner_obs_weight", 0.0) * math.exp(-0.5 * p_dist)
+                    partner_inferred = inferred
+
+                    # Log as an event only when draw is strong enough to act on
+                    if partner_draw > 0.08:
+                        state["signal_events"].append({
+                            "cycle":     cycle,
+                            "receiver":  pid,
+                            "sender":    other_pid,
+                            "strength":  round(partner_draw, 3),
+                            "accel":     round(accel_ratio, 2),
+                            "inferred":  True,   # spatial inference, not state read
+                        })
+                        state["signal_events"] = state["signal_events"][-200:]
+
+            pred["inferred_interest"] = partner_inferred
 
         # Mode switch
         if nearest_prey and nearest_dist < PRED_SWITCH_DIST:
@@ -3347,13 +3397,10 @@ def run_field_v2_cycle(state):
             if pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
                 pred["pos"] = move_toward(pred["pos"], pred["predicted_bloom"],
                                           speed * pred["prediction_conf"])
-            elif (partner_signal > 0.08 and
-                  last_other_pred is not None and
-                  last_other_pred.get("predicted_bloom")):
-                # Partner's signal — move toward their predicted position
-                pred["pos"] = move_toward(pred["pos"],
-                                          last_other_pred["predicted_bloom"],
-                                          speed * partner_signal)
+            elif partner_inferred is not None and partner_draw > 0.08:
+                # Spatial inference: partner appears to be accelerating toward a region.
+                # Move toward inferred destination, weighted by observation confidence.
+                pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * partner_draw)
             else:
                 nb2, _ = nearest_bloom(blooms, pred["pos"])
                 if nb2:
@@ -3460,18 +3507,23 @@ def run_field_v2_cycle(state):
     alive_g = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="grazer")
     alive_b = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="browser")
     log = f2_load(f2_log_path(), [])
+    # Count inferred-acceleration events this run (spatial inference only)
+    inferred_events = [e for e in state.get("signal_events",[]) if e.get("inferred")]
     log.append({
-        "cycle":    cycle,
-        "grazers":  alive_g,
-        "browsers": alive_b,
-        "births":   state["births"],
-        "deaths":   state["deaths"],
-        "kills":    state["predator_kills"],
-        "signals":  len(state.get("signal_events",[])),
-        "traj_hits":state.get("trajectory_hits",0),
+        "cycle":       cycle,
+        "grazers":     alive_g,
+        "browsers":    alive_b,
+        "births":      state["births"],
+        "deaths":      state["deaths"],
+        "kills":       state["predator_kills"],
+        "signals":     len(state.get("signal_events",[])),
+        "inferred":    len(inferred_events),   # spatial inference events only
+        "traj_hits":   state.get("trajectory_hits",0),
         "pred_a_conf": round(preds.get("predator_a",{}).get("prediction_conf",0),3),
         "pred_b_conf": round(preds.get("predator_b",{}).get("prediction_conf",0),3),
-        "blooms":   sum(1 for b in blooms if b["active"]),
+        "pred_a_obs":  round(preds.get("predator_a",{}).get("partner_obs_weight",0),3),
+        "pred_b_obs":  round(preds.get("predator_b",{}).get("partner_obs_weight",0),3),
+        "blooms":      sum(1 for b in blooms if b["active"]),
     })
     f2_save(f2_log_path(), log[-5000:])
 
@@ -3677,7 +3729,7 @@ def fv2_state():
             "kills":           p["kills"],
             "hungry":          p["cycles_hungry"],
             "sensitivity":     round(p["sensitivity"],3),
-            "partner_weight":  round(p["partner_signal_weight"],3),
+            "partner_obs_weight": round(p.get("partner_obs_weight",0),3),
             "prediction_conf": round(p.get("prediction_conf",0),3),
             "memory_len":      p.get("memory_len", PRED_MEMORY_LEN),
             "memory_entries":  len(p.get("bloom_memory",[])),
@@ -3699,7 +3751,7 @@ def fv2_signals():
     return jsonify({
         "total":  len(events),
         "recent": events[-20:],
-        "note":   "Signal = predator B responded to predator A mode-switch, weighted by A's trajectory confidence",
+        "note":   "Signal = predator inferred partner interest from spatial acceleration (no internal state shared)",
     })
 
 @app.route("/field/trajectory")
@@ -3786,3 +3838,4 @@ def fv2_reset():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5002))
     app.run(host="0.0.0.0", port=port)
+
