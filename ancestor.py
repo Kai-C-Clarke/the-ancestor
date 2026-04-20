@@ -3059,11 +3059,14 @@ def mutate_predator(pred, hungry):
 
 def update_bloom_memory(pred, cycle, blooms):
     """Record nearest bloom position this cycle."""
+    maxlen = pred.get("memory_len", PRED_MEMORY_LEN)
+    if maxlen == 0:
+        pred["bloom_memory"] = []   # bloom-blind: never accumulate
+        return pred
     nb, dist = nearest_bloom(blooms, pred["pos"])
     if nb is None: return pred
     mem = pred.get("bloom_memory", [])
     mem.append((cycle, nb["pos"]))
-    maxlen = pred.get("memory_len", PRED_MEMORY_LEN)
     pred["bloom_memory"] = mem[-maxlen:]
     return pred
 
