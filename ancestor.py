@@ -3372,16 +3372,16 @@ def run_field_v2_cycle(state):
             if not in_species_band:
                 continue  # not my kind — ignore
 
-            # Duty cycle affects detectability: longer pulses travel further
+            # Duty cycle affects detectability: longer pulses are easier to locate.
+            # kin_factor is purely duty-based — no distance decay here.
+            # Distance decay applied once in partner_draw, not twice.
             other_duty = other_pred.get("emit_duty", 0.5)
-            id_signal_strength = other_duty * math.exp(
-                -0.2 * gcd(pred["pos"], other_pred["pos"]))
+            kin_factor = other_duty  # identity clarity: longer pulses = clearer signal
 
             # Individual recognition: how similar is the partner's id_freq to
             # what we've learned to track? For now both predators know each other
             # from the start (same species, immediate recognition). The weight
             # that evolves (partner_obs_weight) captures how much we *act* on it.
-            kin_factor = id_signal_strength  # scales partner_draw below
 
             # Record partner's current position and speed into observation buffer
             history = pred.get("partner_pos_history", [])
@@ -3406,14 +3406,13 @@ def run_field_v2_cycle(state):
                 continue
 
             # Detect speed discontinuity: last 2 cycles vs previous 2
+            # Filter out teleport artefacts (accel > 100x = respawn)
             baseline  = sum(recent_speeds[-4:-2]) / 2
             current   = sum(recent_speeds[-2:])   / 2
-
-            # Hunt-mode acceleration is ~2.4x search speed
-            # Only trigger if partner's movement jumped meaningfully (>1.6x)
             accel_ratio = current / max(baseline, 1e-6)
 
-            if accel_ratio > 1.6 and current > PRED_SPEED_SEARCH * 1.2:
+            # Hunt-mode acceleration is ~2.4x search speed. Ignore teleport spikes.
+            if 1.6 < accel_ratio < 50 and current > PRED_SPEED_SEARCH * 1.2:
                 # Partner found prey and surged. Extrapolate where they're heading.
                 pos_prev = history[-3][1]
                 pos_now  = history[-1][1]
@@ -3424,11 +3423,10 @@ def run_field_v2_cycle(state):
                     # Project 0.1 rad ahead — where prey likely still is
                     inferred = norm(tuple(pos_now[j] + unit[j]*0.1 for j in range(3)))
                     p_dist       = gcd(pred["pos"], other_pred["pos"])
-                    # partner_draw scaled by: obs_weight × kin_factor (duty×distance decay)
-                    # kin_factor encodes "how clearly I can perceive this individual's identity"
+                    # Single distance decay — kin_factor is duty only, no double decay
                     partner_draw = (pred.get("partner_obs_weight", 0.15)
                                     * kin_factor
-                                    * math.exp(-0.2 * p_dist))
+                                    * math.exp(-0.15 * p_dist))  # gentler falloff
                     partner_inferred = inferred
 
                     if partner_draw > 0.02:
@@ -3461,8 +3459,17 @@ def run_field_v2_cycle(state):
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 2))
                 pred["_acted_on_inference"] = True
             elif not bloom_blind and pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
-                pred["pos"] = move_toward(pred["pos"], pred["predicted_bloom"],
-                                          speed * pred["prediction_conf"])
+                # Move toward predicted bloom — but perturb slightly to search the
+                # neighbourhood rather than homing to a point. Prey cluster at
+                # bloom edges, not the centre. Small random walk near the target.
+                target = pred["predicted_bloom"]
+                dist_to_target = gcd(pred["pos"], target)
+                if dist_to_target < BLOOM_RADIUS * 1.5:
+                    # We're already near the bloom — orbit/patrol rather than converge
+                    pred["pos"] = random_walk(pred["pos"], speed * 0.8)
+                else:
+                    pred["pos"] = move_toward(pred["pos"], target,
+                                              speed * pred["prediction_conf"])
             elif partner_inferred is not None and partner_draw > 0.08:
                 # Sighted predator following partner as fallback
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * partner_draw)
