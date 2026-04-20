@@ -2772,8 +2772,17 @@ MAX_BROWSERS         = 150
 MIN_BROWSERS         = 5
 
 # Predators
-PRED_SEARCH_FREQ     = 0.12
-PRED_HUNT_FREQ       = 2.0
+# Identity emission: each predator has a stable base_freq within the species band.
+# The band [PRED_ID_BAND_LO, PRED_ID_BAND_HI] is distinct from all prey frequencies.
+# Within the band, individuals differ — A at one end, B slightly offset.
+# Pulse duration (emit_duty) also varies per individual: fraction of cycle "on".
+# These two parameters together constitute a persistent identity signature.
+# Mode-switching modulates AMPLITUDE and SPEED, not the base frequency.
+# This lets B distinguish "A moving fast" from "random entity moving fast".
+PRED_ID_BAND_LO     = 1.4    # below all natural prey upper range (~0.8 for browsers)
+PRED_ID_BAND_HI     = 1.8    # well-separated from prey
+PRED_SEARCH_FREQ    = 0.12   # retained for prey-detection physics (not identity)
+PRED_HUNT_FREQ      = 2.0    # hunt mode still uses high freq for close-range detection
 PRED_SWITCH_DIST     = 0.15   # switch to hunt when prey this close — tighter, less wasted energy
 PRED_DAMAGE          = 20.0
 PRED_SPEED_SEARCH    = 0.035
@@ -2994,14 +3003,24 @@ def new_browser(pos=None, energy=None, gen=0, parent=None, genes=None):
         "speed":      max(0.005,g.get("speed",      0.025 + random.gauss(0,0.003))),
     }
 
-def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
+def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None, id_freq=None, duty=None):
+    # id_freq: stable carrier within the species band — individual identity.
+    # emit_duty: pulse duration fraction — the second identity dimension.
+    # Together these constitute a persistent signature. Mode changes modulate
+    # amplitude and search/hunt freq, not the identity carrier.
+    if id_freq is None:
+        id_freq = PRED_ID_BAND_LO + (PRED_ID_BAND_HI - PRED_ID_BAND_LO) * 0.25
+    if duty is None:
+        duty = 0.5
     return {
         "id":           pid,
         "pos":          pos or random_point(),
         "energy":       PRED_ENERGY_START,
         "age":          0, "alive": True,
         "mode":         "search",
-        "emit_freq":    PRED_SEARCH_FREQ,
+        "emit_freq":    PRED_SEARCH_FREQ,   # prey-detection frequency (mode-dependent)
+        "id_freq":      id_freq,             # identity carrier — stable within species band
+        "emit_duty":    duty,                # pulse duration as fraction of cycle
         "sensitivity":  sensitivity,
         "speed_search": speed or PRED_SPEED_SEARCH,
         "speed_hunt":   PRED_SPEED_HUNT,
@@ -3009,16 +3028,13 @@ def new_predator(pos=None, pid="predator_a", sensitivity=0.6, speed=None):
         "cycles_hungry":0,
         "last_kill":    0,
         "damage":       PRED_DAMAGE,
-        # Trajectory memory — rolling window of bloom positions
-        "bloom_memory": [],          # list of (cycle, pos) tuples
+        "bloom_memory": [],
         "memory_len":   PRED_MEMORY_LEN,
-        # Memory-based prediction
-        "predicted_bloom": None,     # where we think bloom will be next
-        "prediction_conf": 0.0,      # confidence 0-1
-        # Communication
-        "partner_pos_history": [],     # rolling window of (cycle, pos, speed) for partner
-        "partner_obs_weight":  0.15,  # evolves: how much partner movement informs us (non-zero start so pathway is active)
-        "inferred_interest":   None,  # destination inferred from partner acceleration
+        "predicted_bloom": None,
+        "prediction_conf": 0.0,
+        "partner_pos_history": [],
+        "partner_obs_weight":  0.15,
+        "inferred_interest":   None,
         "mutation_rate": 0.06,
     }
 
@@ -3160,18 +3176,27 @@ def f2_moments_path():return f"{F2_DATA_DIR}/moments_v2.json"
 def f2_init_state():
     grazers  = {new_id("g"): new_grazer()  for _ in range(30)}
     browsers = {new_id("b"): new_browser() for _ in range(8)}
+    # A and B: same species band, distinct identity frequencies and duty cycles.
+    # A: lower end of band, longer duty (sustained pulses — the navigator)
+    # B: upper end of band, shorter duty (punctuated pulses — the follower)
+    # Both are clearly "predator-band" to any receiver; both are distinguishable
+    # from each other within that band. This is kin recognition without language.
     pred_a   = new_predator(
-        pos=sph2xyz(0, math.pi/2), pid="predator_a", sensitivity=0.65)
+        pos=sph2xyz(0, math.pi/2), pid="predator_a", sensitivity=0.65,
+        id_freq=PRED_ID_BAND_LO + 0.05,   # 1.45 — lower end of band
+        duty=0.65)                          # longer pulses
     pred_b   = new_predator(
         pos=sph2xyz(math.pi, math.pi/2), pid="predator_b",
-        sensitivity=0.35, speed=0.05)
+        sensitivity=0.35, speed=0.05,
+        id_freq=PRED_ID_BAND_HI - 0.05,   # 1.75 — upper end of band
+        duty=0.35)                          # shorter pulses
     # B is bloom-blind: no trajectory memory, cannot predict bloom movement.
     # Its only route to food is reading A's movement in the shared field.
-    pred_b["memory_len"]        = 0      # never accumulates bloom trajectory
+    pred_b["memory_len"]        = 0
     pred_b["bloom_memory"]      = []
     pred_b["predicted_bloom"]   = None
     pred_b["prediction_conf"]   = 0.0
-    pred_b["partner_obs_weight"]= 0.35   # inference is B's primary sense
+    pred_b["partner_obs_weight"]= 0.35
     return {
         "cycle":      0,
         "status":     "initialised",
@@ -3327,75 +3352,94 @@ def run_field_v2_cycle(state):
 
         # ── Partner spatial observation ─────────────────────────
         # No telepathy. Each predator observes only where the other IS and was.
-        # Infer interest from acceleration: rapid movement toward a region
-        # suggests prey is there. No internal state is shared — only position history.
+        # Identity recognition: before tracking movement, verify the emitter
+        # is within the predator species band (id_freq in [PRED_ID_BAND_LO, PRED_ID_BAND_HI]).
+        # This distinguishes "my kind moving fast" from "prey moving fast".
+        # The meaningful signal is then a SPEED DISCONTINUITY — when a confirmed
+        # conspecific suddenly surges, it has found prey.
         partner_inferred = None
         partner_draw     = 0.0
         for other_pid, other_pred in preds.items():
             if other_pid == pid: continue
 
-            # Record partner's current position into our observation buffer
+            # ── Species recognition via identity frequency ──
+            # Only respond to emitters in the predator band.
+            # Pulse duty cycle modulates effective signal strength:
+            # a predator with longer duty (more sustained emission) is
+            # easier to locate. This is individual variation, not mode.
+            other_id_freq = other_pred.get("id_freq", PRED_ID_BAND_LO + 0.05)
+            in_species_band = PRED_ID_BAND_LO <= other_id_freq <= PRED_ID_BAND_HI
+            if not in_species_band:
+                continue  # not my kind — ignore
+
+            # Duty cycle affects detectability: longer pulses travel further
+            other_duty = other_pred.get("emit_duty", 0.5)
+            id_signal_strength = other_duty * math.exp(
+                -0.2 * gcd(pred["pos"], other_pred["pos"]))
+
+            # Individual recognition: how similar is the partner's id_freq to
+            # what we've learned to track? For now both predators know each other
+            # from the start (same species, immediate recognition). The weight
+            # that evolves (partner_obs_weight) captures how much we *act* on it.
+            kin_factor = id_signal_strength  # scales partner_draw below
+
+            # Record partner's current position and speed into observation buffer
             history = pred.get("partner_pos_history", [])
-            history.append((cycle, other_pred["pos"], other_pred.get("speed_hunt", PRED_SPEED_HUNT)))
+            cur_speed = other_pred.get("speed_hunt" if other_pred.get("mode") == "hunt" else "speed_search", PRED_SPEED_SEARCH)
+            history.append((cycle, other_pred["pos"], cur_speed))
             pred["partner_pos_history"] = history[-20:]  # 20-cycle rolling window
 
-            # Need at least 6 observations to detect directional consistency
-            if len(pred["partner_pos_history"]) < 6:
+            # Need at least 4 observations to measure speed change
+            if len(pred["partner_pos_history"]) < 4:
                 continue
 
             history = pred["partner_pos_history"]
 
-            # Compute step-by-step unit direction vectors over the history window
-            # A partner moving consistently toward a region is informative
-            # even without acceleration — sustained direction is the signal
-            steps = []
+            # Measure actual displacement speeds over recent cycles
+            recent_speeds = []
             for i in range(len(history) - 1):
-                p0 = history[i][1]
-                p1 = history[i+1][1]
-                dv = tuple(p1[j] - p0[j] for j in range(3))
-                mag = math.sqrt(sum(x*x for x in dv))
-                if mag > 1e-8:
-                    steps.append(tuple(x/mag for x in dv))
+                p0, p1 = history[i][1], history[i+1][1]
+                dist_moved = gcd(p0, p1)
+                recent_speeds.append(dist_moved)
 
-            if len(steps) < 5:
+            if len(recent_speeds) < 3:
                 continue
 
-            # Directional consistency: dot product of consecutive step directions
-            # If consistently > 0.6 across last 5 steps, partner is tracking something
-            recent_steps = steps[-5:]
-            consistency_scores = []
-            for i in range(len(recent_steps) - 1):
-                dot = sum(recent_steps[i][j] * recent_steps[i+1][j] for j in range(3))
-                consistency_scores.append(dot)
+            # Detect speed discontinuity: last 2 cycles vs previous 2
+            baseline  = sum(recent_speeds[-4:-2]) / 2
+            current   = sum(recent_speeds[-2:])   / 2
 
-            mean_consistency = sum(consistency_scores) / len(consistency_scores)
+            # Hunt-mode acceleration is ~2.4x search speed
+            # Only trigger if partner's movement jumped meaningfully (>1.6x)
+            accel_ratio = current / max(baseline, 1e-6)
 
-            # Straightness: net displacement / total path length
-            pos_start = history[-6][1]
-            pos_end   = history[-1][1]
-            net_disp  = gcd(pos_start, pos_end)
-            path_len  = sum(gcd(history[i][1], history[i+1][1]) for i in range(len(history)-6, len(history)-1))
-            straightness = net_disp / max(path_len, 1e-8)
-
-            # Partner is "interested" if moving consistently toward something
-            if mean_consistency > 0.6 and straightness > 0.5 and net_disp > 0.02:
-                delta = tuple(pos_end[i] - pos_start[i] for i in range(3))
+            if accel_ratio > 1.6 and current > PRED_SPEED_SEARCH * 1.2:
+                # Partner found prey and surged. Extrapolate where they're heading.
+                pos_prev = history[-3][1]
+                pos_now  = history[-1][1]
+                delta = tuple(pos_now[j] - pos_prev[j] for j in range(3))
                 mag   = math.sqrt(sum(d*d for d in delta))
                 if mag > 1e-6:
                     unit     = tuple(d/mag for d in delta)
-                    inferred = norm(tuple(pos_end[i] + unit[i]*0.2 for i in range(3)))
+                    # Project 0.1 rad ahead — where prey likely still is
+                    inferred = norm(tuple(pos_now[j] + unit[j]*0.1 for j in range(3)))
                     p_dist       = gcd(pred["pos"], other_pred["pos"])
-                    partner_draw = pred.get("partner_obs_weight", 0.15) * math.exp(-0.3 * p_dist)
+                    # partner_draw scaled by: obs_weight × kin_factor (duty×distance decay)
+                    # kin_factor encodes "how clearly I can perceive this individual's identity"
+                    partner_draw = (pred.get("partner_obs_weight", 0.15)
+                                    * kin_factor
+                                    * math.exp(-0.2 * p_dist))
                     partner_inferred = inferred
 
-                    if partner_draw > 0.05:
+                    if partner_draw > 0.02:
                         state["signal_events"].append({
                             "cycle":       cycle,
                             "receiver":    pid,
                             "sender":      other_pid,
                             "strength":    round(partner_draw, 3),
-                            "consistency": round(mean_consistency, 2),
-                            "straight":    round(straightness, 2),
+                            "accel":       round(accel_ratio, 2),
+                            "speed_jump":  round(current, 4),
+                            "kin":         round(kin_factor, 3),
                             "inferred":    True,
                         })
                         state["signal_events"] = state["signal_events"][-200:]
@@ -3471,9 +3515,11 @@ def run_field_v2_cycle(state):
             pred["cycles_hungry"] += 1
             # Clear inference flag without reward
             pred.pop("_acted_on_inference", None)
-            # Mild decay if inference was available but produced no kill over time
+            # Mild decay if inference produced no kill over time — but never to zero
+            # Floor at 0.05 so a bloom-blind predator never stops observing entirely
             if pred["cycles_hungry"] > 0 and pred["cycles_hungry"] % 20 == 0:
-                pred["partner_obs_weight"] = max(0.0,
+                floor = 0.05 if pred.get("memory_len", PRED_MEMORY_LEN) == 0 else 0.0
+                pred["partner_obs_weight"] = max(floor,
                     pred.get("partner_obs_weight", 0.15) - 0.01)
 
         preds[pid] = mutate_predator(pred, pred["cycles_hungry"])
