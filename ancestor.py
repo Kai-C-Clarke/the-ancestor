@@ -3811,6 +3811,8 @@ def fv2_state():
             "prediction_conf": round(p.get("prediction_conf",0),3),
             "memory_len":      p.get("memory_len", PRED_MEMORY_LEN),
             "memory_entries":  len(p.get("bloom_memory",[])),
+            "id_freq":         round(p.get("id_freq", PRED_ID_BAND_LO + 0.05), 3),
+            "emit_duty":       round(p.get("emit_duty", 0.5), 3),
         }
     return jsonify({
         "cycle":      state.get("cycle"),
