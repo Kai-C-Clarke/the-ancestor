@@ -38,7 +38,8 @@ import math
 from datetime import datetime, timezone
 from threading import Thread
 from collections import defaultdict
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
+from flask_cors import CORS, request
 import requests as req
 
 # ── Logging ───────────────────────────────────────────────────
@@ -48,6 +49,7 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
+CORS(app, origins=["https://consilium.ink", "https://www.consilium.ink", "http://localhost:*", "*"])
 
 # ── Config ────────────────────────────────────────────────────
 DEEPSEEK_URL    = "https://api.deepseek.com/chat/completions"
