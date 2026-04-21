@@ -3836,6 +3836,23 @@ def fv2_health():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+@app.route("/field/blooms")
+def fv2_blooms():
+    """Lightweight bloom positions only — for the visualisation page."""
+    state = f2_load(f2_state_path(), None) or f2_init_state()
+    blooms = []
+    for b in state.get("blooms", []):
+        if not b.get("active", True): continue
+        pos = b.get("pos", [])
+        if len(pos) < 3: continue
+        theta, phi = xyz2sph(*pos)
+        blooms.append({
+            "theta": round(math.degrees(theta), 1),
+            "phi":   round(math.degrees(phi), 1),
+        })
+    return jsonify({"blooms": blooms, "cycle": state.get("cycle", 0)})
+
+
 @app.route("/field/state")
 def fv2_state():
     state = f2_load(f2_state_path(), None) or f2_init_state()
