@@ -3836,6 +3836,26 @@ def fv2_health():
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+@app.route("/field/sample")
+def fv2_sample():
+    """50 random grazer positions for visualisation — lightweight."""
+    import random as _rnd
+    state = f2_load(f2_state_path(), None) or f2_init_state()
+    alive = [(k,v) for k,v in state.get("entities",{}).items()
+             if v.get("alive", True) and v.get("type") == "grazer"]
+    sample = _rnd.sample(alive, min(50, len(alive)))
+    grazers = []
+    for _, e in sample:
+        pos = e.get("pos", [])
+        if len(pos) < 3: continue
+        theta, phi = xyz2sph(*pos)
+        grazers.append({
+            "theta": round(math.degrees(theta), 1),
+            "phi":   round(math.degrees(phi), 1),
+        })
+    return jsonify({"grazers": grazers, "total": len(alive), "cycle": state.get("cycle", 0)})
+
+
 @app.route("/field/blooms")
 def fv2_blooms():
     """Lightweight endpoint for the visualisation page — blooms + predator positions."""
