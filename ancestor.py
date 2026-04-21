@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from threading import Thread
 from collections import defaultdict
 from flask import Flask, jsonify
-from flask_cors import CORS, request
+from flask_cors import CORS
 import requests as req
 
 # ── Logging ───────────────────────────────────────────────────
