@@ -3463,7 +3463,7 @@ def run_field_v2_cycle(state):
             speed            = pred["speed_search"]
             bloom_blind = pred.get("memory_len", PRED_MEMORY_LEN) == 0
             # Bloom-blind predators: inference is primary navigation, not fallback
-            if bloom_blind and partner_inferred is not None and partner_draw > 0.05:
+            if bloom_blind and partner_inferred is not None and partner_draw > 0.02:
                 pred["pos"] = move_toward(pred["pos"], partner_inferred, speed * min(1.0, partner_draw * 2))
                 pred["_acted_on_inference"] = True
             elif not bloom_blind and pred.get("predicted_bloom") and pred["prediction_conf"] > 0.3:
@@ -3551,7 +3551,7 @@ def run_field_v2_cycle(state):
             # Mild decay if inference produced no kill — floor prevents complete disengagement.
             # Both sighted and blind predators maintain a minimum attentiveness to conspecifics.
             if pred["cycles_hungry"] > 0 and pred["cycles_hungry"] % 20 == 0:
-                floor = 0.05  # same floor for both — nobody stops watching their kin
+                floor = 0.02  # floor below action threshold (0.02) so obs_weight can rise above it
                 pred["partner_obs_weight"] = max(floor,
                     pred.get("partner_obs_weight", 0.15) - 0.01)
 
