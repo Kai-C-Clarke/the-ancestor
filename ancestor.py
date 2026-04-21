@@ -3838,7 +3838,7 @@ def fv2_health():
 
 @app.route("/field/blooms")
 def fv2_blooms():
-    """Lightweight bloom positions only — for the visualisation page."""
+    """Lightweight endpoint for the visualisation page — blooms + predator positions."""
     state = f2_load(f2_state_path(), None) or f2_init_state()
     blooms = []
     for b in state.get("blooms", []):
@@ -3850,7 +3850,18 @@ def fv2_blooms():
             "theta": round(math.degrees(theta), 1),
             "phi":   round(math.degrees(phi), 1),
         })
-    return jsonify({"blooms": blooms, "cycle": state.get("cycle", 0)})
+    # Include predator positions so B (bloom-blind) is visible in viz
+    preds = {}
+    for pid, p in state.get("predators", {}).items():
+        pos = p.get("pos", [])
+        if len(pos) < 3: continue
+        theta, phi = xyz2sph(*pos)
+        preds[pid] = {
+            "theta": round(math.degrees(theta), 1),
+            "phi":   round(math.degrees(phi), 1),
+            "partner_obs_weight": round(p.get("partner_obs_weight", 0), 3),
+        }
+    return jsonify({"blooms": blooms, "predators": preds, "cycle": state.get("cycle", 0)})
 
 
 @app.route("/field/state")
