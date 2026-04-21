@@ -3628,7 +3628,7 @@ def run_field_v2_cycle(state):
     if moments:
         existing = f2_load(f2_moments_path(), [])
         existing.extend(moments)
-        f2_save(f2_moments_path(), existing)
+        f2_save(f2_moments_path(), existing[-2000:])  # cap — was unbounded
 
     # ── Log ────────────────────────────────────────────────────
     alive_g = sum(1 for v in entities.values() if v.get("alive") and v["type"]=="grazer")
