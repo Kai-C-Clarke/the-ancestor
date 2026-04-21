@@ -2338,6 +2338,10 @@ def run_eco_cycle(state):
                         "generation": child["generation"],
                         "resonance":  round(resonance, 3),
                     }
+                        if len(state["lineage"]) > 500:
+                            excess = len(state["lineage"]) - 500
+                            for old_key in list(state["lineage"].keys())[:excess]:
+                                del state["lineage"][old_key]
 
                     # Breeding cost and cooldown
                     new_entities[id_a]["energy"]        -= 15.0
@@ -3577,6 +3581,11 @@ def run_field_v2_cycle(state):
             state["lineage"][child["id"]] = {
                 "parent": eid, "cycle": cycle, "gen": child["generation"]
             }
+            # Cap lineage to avoid unbounded memory growth
+            if len(state["lineage"]) > 500:
+                excess = len(state["lineage"]) - 500
+                for old_key in list(state["lineage"].keys())[:excess]:
+                    del state["lineage"][old_key]
             moments.append({
                 "cycle": cycle, "type": "birth",
                 "child_id": child["id"], "child_type": child["type"],
