@@ -4,27 +4,11 @@ services:
     env: python
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn ancestor:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1
+    startCommand: gunicorn ancestor:app --bind 0.0.0.0:$PORT --timeout 120 --worker-class gevent --workers 1
     disk:
       name: ancestor-disk
       mountPath: /mnt/data
       sizeGB: 1
     envVars:
-      - key: DEEPSEEK_API_KEY
-        sync: false
-      - key: ANCESTOR_KEY
-        sync: false
       - key: ANCESTOR_ACTIVE
         value: "true"
-      - key: MAX_GENERATIONS
-        value: "1000"
-      - key: FITNESS_CEILING
-        value: "0.85"
-      - key: GENERATION_DELAY
-        value: "3.0"
-      - key: CONSILIUM_API_URL
-        value: "https://consilium-d1fw.onrender.com"
-      - key: NEWS_API_URL
-        value: "https://claude-composer.onrender.com"
-      - key: MEMORY_SERVER_URL
-        value: "https://claude-working-memory.onrender.com"
