@@ -738,6 +738,7 @@ def run_loop():
             )
             last_report = c
 
+update_cache()  # initialise cache before thread starts
 _thread = threading.Thread(target=run_loop, daemon=True)
 _thread.start()
 
