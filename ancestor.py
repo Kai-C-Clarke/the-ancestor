@@ -13,9 +13,6 @@ Communication — if it emerges — emerges because physics made it necessary.
 author: jon stiles / claude
 """
 
-from gevent import monkey
-monkey.patch_all()
-
 import os
 import math
 import time
@@ -729,6 +726,9 @@ def run_loop():
             c = world.cycle
             if c % cache_interval == 0:
                 update_cache()
+        # Yield every 10 cycles so HTTP requests can get through
+        if c % 10 == 0:
+            time.sleep(0)
 
         if c - last_report >= report_interval:
             s = _cache
