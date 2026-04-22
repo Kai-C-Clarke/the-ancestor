@@ -709,7 +709,8 @@ _cache_cycle = -1
 
 def update_cache():
     global _cache, _cache_cycle
-    s = world.summary()
+    with _lock:
+        s = world.summary()
     _cache       = s
     _cache_cycle = s["cycle"]
 
@@ -721,14 +722,11 @@ def run_loop():
     last_report     = 0
 
     while _running:
-        with _lock:
-            world.step()
-            c = world.cycle
-            if c % cache_interval == 0:
-                update_cache()
-        # Yield every 10 cycles so HTTP requests can get through
+        world.step()
+        c = world.cycle
         if c % 10 == 0:
-            time.sleep(0)
+            update_cache()
+            time.sleep(0)  # yield GIL
 
         if c - last_report >= report_interval:
             s = _cache
