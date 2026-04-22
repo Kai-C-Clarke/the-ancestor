@@ -4,7 +4,7 @@ services:
     env: python
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn ancestor:app --bind 0.0.0.0:$PORT --timeout 300 --workers 1 --threads 2
+    startCommand: python ancestor.py
     disk:
       name: ancestor-disk
       mountPath: /mnt/data
@@ -12,3 +12,5 @@ services:
     envVars:
       - key: ANCESTOR_ACTIVE
         value: "true"
+      - key: PORT
+        value: "10000"
