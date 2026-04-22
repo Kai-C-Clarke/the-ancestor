@@ -67,13 +67,13 @@ GRAZER_ENERGY_START = 25.0
 GRAZER_ENERGY_MAX   = 60.0
 GRAZER_DEPLETE      = 0.3
 GRAZER_MOVE_COST    = 0.1
-GRAZER_BREED_THRESH = 45.0
-GRAZER_BREED_COOL   = 8
+GRAZER_BREED_THRESH = 35.0
+GRAZER_BREED_COOL   = 5
 GRAZER_MAX_AGE      = 80
 GRAZER_FOOD_GAIN    = 15.0
 GRAZER_SPAWN_COUNT  = 6
 MAX_GRAZERS         = 8000
-MIN_GRAZERS         = 50
+MIN_GRAZERS         = 200
 
 # Hunters
 N_HUNTERS_INIT      = 20
@@ -86,8 +86,8 @@ HUNTER_BREED_COOL   = 20
 HUNTER_MAX_AGE      = 200
 HUNTER_FOOD_GAIN    = 40.0
 HUNTER_SPAWN_COUNT  = 2
-HUNTER_HUNT_RADIUS  = 0.12
-MAX_HUNTERS         = 200
+HUNTER_HUNT_RADIUS  = 0.06
+MAX_HUNTERS         = 120
 MIN_HUNTERS         = 4
 
 # Field physics
@@ -701,24 +701,34 @@ class World:
 
 # ── Simulation loop ───────────────────────────────────────────────────────────
 
-world  = World()
-_lock  = threading.Lock()
-_running = True
+world        = World()
+_lock        = threading.Lock()
+_running     = True
+_cache       = {}          # cached summary for HTTP endpoints
+_cache_cycle = -1
+
+def update_cache():
+    global _cache, _cache_cycle
+    s = world.summary()
+    _cache       = s
+    _cache_cycle = s["cycle"]
 
 def run_loop():
     global _running
     log.info("Origin experiment started — running flat out")
     report_interval = 1000
-    last_report = 0
+    cache_interval  = 100
+    last_report     = 0
 
     while _running:
         with _lock:
             world.step()
             c = world.cycle
+            if c % cache_interval == 0:
+                update_cache()
 
         if c - last_report >= report_interval:
-            with _lock:
-                s = world.summary()
+            s = _cache
             log.info(
                 f"cycle:{s['cycle']:>8} gen:{s['generation']:>4} "
                 f"H:{s['hunters']:>4} G:{s['grazers']:>6} "
@@ -735,39 +745,37 @@ _thread.start()
 
 @app.route("/field/health")
 def field_health():
-    with _lock:
-        s = world.summary()
+    s = _cache if _cache else {}
     return jsonify({
         "status":        "running",
         "service":       "origin-experiment",
-        "cycle":         s["cycle"],
-        "generation":    s["generation"],
-        "hunters":       s["hunters"],
-        "grazers":       s["grazers"],
-        "blooms":        s["blooms"],
-        "vents":         s["vents"],
-        "total_signals": s["total_signals"],
-        "bm_recent":     s["bm_recent"],
-        "bm_trend":      s["bm_trend"],
-        "energy_pool":   s["energy_pool"],
+        "cycle":         s.get("cycle", 0),
+        "generation":    s.get("generation", 0),
+        "hunters":       s.get("hunters", 0),
+        "grazers":       s.get("grazers", 0),
+        "blooms":        s.get("blooms", 0),
+        "vents":         s.get("vents", 0),
+        "total_signals": s.get("total_signals", 0),
+        "bm_recent":     s.get("bm_recent", 0),
+        "bm_trend":      s.get("bm_trend", 0),
+        "energy_pool":   s.get("energy_pool", 0),
     })
 
 @app.route("/field/summary")
 def field_summary():
-    with _lock:
-        return jsonify(world.summary())
+    return jsonify(_cache if _cache else {})
 
 @app.route("/field/bm")
 def field_bm():
     """Behaviour modification log — the core experiment output."""
-    with _lock:
-        return jsonify({
-            "question": "Does entity A modify the behaviour of entity B, and by what means?",
-            "bm_log":   list(world.bm_log),
-            "bm_trend": world.bm_trend(),
-            "total_signals": world.total_signals,
-            "cycle":    world.cycle,
-        })
+    s = _cache if _cache else {}
+    return jsonify({
+        "question":      "Does entity A modify the behaviour of entity B, and by what means?",
+        "bm_log":        s.get("bm_log", []),
+        "bm_trend":      s.get("bm_trend", 0),
+        "total_signals": s.get("total_signals", 0),
+        "cycle":         s.get("cycle", 0),
+    })
 
 @app.route("/field/hunters")
 def field_hunters():
@@ -776,14 +784,14 @@ def field_hunters():
         hunters = []
         for h in list(world.hunters.values())[:50]:
             hunters.append({
-                "id":         h["id"],
-                "generation": h["generation"],
-                "age":        h["age"],
-                "energy":     round(h["energy"], 1),
-                "kills":      h["kills"],
-                "genome":     {k: round(v, 3) if isinstance(v, float) else v
-                               for k, v in h["genome"].items()},
-                "emit_state": round(h["emit_state"], 3),
+                "id":              h["id"],
+                "generation":      h["generation"],
+                "age":             h["age"],
+                "energy":          round(h["energy"], 1),
+                "kills":           h["kills"],
+                "genome":          {k: round(v, 3) if isinstance(v, float) else v
+                                    for k, v in h["genome"].items()},
+                "emit_state":      round(h["emit_state"], 3),
                 "signal_received": h["signal_received"],
             })
     return jsonify({"hunters": hunters, "cycle": world.cycle})
