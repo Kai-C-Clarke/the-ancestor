@@ -707,12 +707,26 @@ _running     = True
 _cache       = {}          # cached summary for HTTP endpoints
 _cache_cycle = -1
 
+STATE_FILE = '/mnt/data/state.json'
+
 def update_cache():
     global _cache, _cache_cycle
     with _lock:
         s = world.summary()
     _cache       = s
     _cache_cycle = s["cycle"]
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(s, f)
+    except Exception as e:
+        log.warning(f"Cache write failed: {e}")
+
+def read_cache():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except:
+        return _cache
 
 def run_loop():
     global _running
@@ -747,7 +761,7 @@ _thread.start()
 
 @app.route("/field/health")
 def field_health():
-    s = _cache if _cache else {}
+    s = read_cache() if _cache else {}
     return jsonify({
         "status":        "running",
         "service":       "origin-experiment",
@@ -765,12 +779,12 @@ def field_health():
 
 @app.route("/field/summary")
 def field_summary():
-    return jsonify(_cache if _cache else {})
+    return jsonify(read_cache())
 
 @app.route("/field/bm")
 def field_bm():
     """Behaviour modification log — the core experiment output."""
-    s = _cache if _cache else {}
+    s = read_cache()
     return jsonify({
         "question":      "Does entity A modify the behaviour of entity B, and by what means?",
         "bm_log":        s.get("bm_log", []),
