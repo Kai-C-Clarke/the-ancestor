@@ -13,6 +13,9 @@ Communication — if it emerges — emerges because physics made it necessary.
 author: jon stiles / claude
 """
 
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import math
 import time
