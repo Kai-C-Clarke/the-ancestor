@@ -33,29 +33,29 @@ CORS(app)
 # WORLD PARAMETERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-GRID          = 100          # world is GRID x GRID toroidal 2D plane
-TOTAL_ENERGY  = 100000.0     # conserved. never created or destroyed.
+GRID          = 60           # world is GRID x GRID toroidal 2D plane
+TOTAL_ENERGY  = 200000.0     # conserved. never created or destroyed.
 
 # Planetary field
-N_HOTSPOTS        = 5        # energy sources
+N_HOTSPOTS        = 8        # energy sources
 HOTSPOT_DRIFT     = 0.15     # grid cells per cycle drift
 HOTSPOT_OUTPUT    = 1.2      # energy released per cycle per hotspot
 HOTSPOT_RADIUS    = 8.0      # influence radius in grid cells
 
 # Blooms
-BLOOM_INIT        = 12
-BLOOM_MAX         = 25
-BLOOM_MIN         = 5
+BLOOM_INIT        = 20
+BLOOM_MAX         = 40
+BLOOM_MIN         = 10
 BLOOM_ENERGY_MAX  = 80.0
 BLOOM_FIELD_RANGE = 6.0      # field emission radius
 BLOOM_RESIDUE     = 0.4      # residue deposited per cycle
 BLOOM_DEATH_PULSE = 20.0     # residue pulse on death
 
 # Grazers
-GRAZER_INIT       = 300
-GRAZER_MAX        = 3000
-GRAZER_MIN        = 80
-GRAZER_ENERGY     = 20.0
+GRAZER_INIT       = 800
+GRAZER_MAX        = 5000
+GRAZER_MIN        = 200
+GRAZER_ENERGY     = 30.0
 GRAZER_COST       = 0.25     # energy cost per cycle (metabolism)
 GRAZER_FEED_GAIN  = 12.0     # energy gained per cycle of bloom contact
 GRAZER_BREED_E    = 38.0
@@ -64,13 +64,13 @@ GRAZER_MAX_AGE    = 60
 GRAZER_FIELD_RANGE= 4.0      # grazer emits a faint field
 
 # Hunters
-HUNTER_INIT       = 15
-HUNTER_MAX        = 150
-HUNTER_MIN        = 4
-HUNTER_ENERGY     = 60.0
+HUNTER_INIT       = 40
+HUNTER_MAX        = 300
+HUNTER_MIN        = 10
+HUNTER_ENERGY     = 100.0
 HUNTER_COST       = 0.6
 HUNTER_FEED_GAIN  = 35.0
-HUNTER_BREED_E    = 120.0
+HUNTER_BREED_E    = 180.0
 HUNTER_BREED_COOL = 18
 HUNTER_MAX_AGE    = 150
 HUNTER_FIELD_RANGE= 8.0
@@ -92,7 +92,7 @@ FIELD_DECAY       = 0.88     # field strength falloff per unit distance
 RESIDUE_DECAY     = 0.96     # residue decay per cycle
 
 # Contact feeding
-CONTACT_RADIUS    = 0.6      # grid cells — must be very close
+CONTACT_RADIUS    = 1.2      # grid cells — must be very close
 
 # Behaviour modification sampling
 BM_INTERVAL       = 100      # sample every N cycles
