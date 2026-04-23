@@ -1,25 +1,26 @@
 """
-ancestor.py — The Origin Experiment
-=====================================
+ancestor.py — The Origin Experiment v2
+=======================================
 Question: Does entity A modify the behaviour of entity B,
 and by what means does it do it?
 
-Stack (bottom up):
-  Planetary energy field  →  Vents  →  Blooms  →  Grazers  →  Hunters
+Rules:
+- No move_toward(). Ever.
+- No hunt radius. Feeding is contact only.
+- Energy is conserved.
+- Nothing is given that physics wouldn't give.
 
-Energy is conserved. Nothing is designed above the planetary layer.
-Communication — if it emerges — emerges because physics made it necessary.
+Movement: pure Brownian motion + chemokinesis (more agitation near fields).
+Feeding: overlap only. Membrane contact. No intent.
+Communication: field emissions modulated by internal state.
+              Another entity reads the modulation or it doesn't.
 
-author: jon stiles / claude
+author: jon stiles / claude — april 2026
 """
 
-import os
-import math
-import time
-import random
-import json
-import threading
-import logging
+from gevent import monkey; monkey.patch_all()
+
+import os, math, random, json, time, logging, threading
 from collections import deque
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -27,352 +28,355 @@ from flask_cors import CORS
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app  = Flask(__name__)
 CORS(app)
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORLD PARAMETERS
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# World
-WORLD_RADIUS        = 1.0       # unit sphere
-DT                  = 1         # one cycle = one tick
-
-# Energy budget — conserved across the system
-TOTAL_ENERGY        = 50000.0
+GRID          = 100          # world is GRID x GRID toroidal 2D plane
+TOTAL_ENERGY  = 100000.0     # conserved. never created or destroyed.
 
 # Planetary field
-N_VENTS             = 6         # active vents at any time
-VENT_MIGRATE_RATE   = 0.0002    # radians/cycle — slow geological drift
-VENT_ENERGY_OUTPUT  = 0.8       # energy released per cycle per vent
-VENT_LIFETIME       = 8000      # cycles before vent dies
-VENT_SPAWN_INTERVAL = 1200      # cycles between new vent births
-
-# Residual field decay
-RESIDUE_DECAY       = 0.97      # fraction remaining each cycle (1.0 = permanent)
-RESIDUE_GRID        = 80        # resolution of residue field (80x80 grid on sphere)
+N_HOTSPOTS        = 5        # energy sources
+HOTSPOT_DRIFT     = 0.15     # grid cells per cycle drift
+HOTSPOT_OUTPUT    = 1.2      # energy released per cycle per hotspot
+HOTSPOT_RADIUS    = 8.0      # influence radius in grid cells
 
 # Blooms
-N_BLOOMS_INIT       = 8
-BLOOM_ENERGY_START  = 60.0
-BLOOM_ENERGY_MAX    = 120.0
-BLOOM_LIFETIME      = 600
-BLOOM_EMIT_BASE     = 0.5       # baseline emission frequency
-BLOOM_RESIDUE       = 8.0       # residue left per cycle
-BLOOM_DEATH_RESIDUE = 30.0      # pulse on death (marine snow)
-MAX_BLOOMS          = 20
-MIN_BLOOMS          = 4
+BLOOM_INIT        = 12
+BLOOM_MAX         = 25
+BLOOM_MIN         = 5
+BLOOM_ENERGY_MAX  = 80.0
+BLOOM_FIELD_RANGE = 6.0      # field emission radius
+BLOOM_RESIDUE     = 0.4      # residue deposited per cycle
+BLOOM_DEATH_PULSE = 20.0     # residue pulse on death
 
 # Grazers
-N_GRAZERS_INIT      = 400
-GRAZER_ENERGY_START = 25.0
-GRAZER_ENERGY_MAX   = 60.0
-GRAZER_DEPLETE      = 0.3
-GRAZER_MOVE_COST    = 0.1
-GRAZER_BREED_THRESH = 35.0
-GRAZER_BREED_COOL   = 5
-GRAZER_MAX_AGE      = 80
-GRAZER_FOOD_GAIN    = 15.0
-GRAZER_SPAWN_COUNT  = 6
-MAX_GRAZERS         = 8000
-MIN_GRAZERS         = 200
+GRAZER_INIT       = 300
+GRAZER_MAX        = 3000
+GRAZER_MIN        = 80
+GRAZER_ENERGY     = 20.0
+GRAZER_COST       = 0.25     # energy cost per cycle (metabolism)
+GRAZER_FEED_GAIN  = 12.0     # energy gained per cycle of bloom contact
+GRAZER_BREED_E    = 38.0
+GRAZER_BREED_COOL = 6
+GRAZER_MAX_AGE    = 60
+GRAZER_FIELD_RANGE= 4.0      # grazer emits a faint field
 
 # Hunters
-N_HUNTERS_INIT      = 20
-HUNTER_ENERGY_START = 80.0
-HUNTER_ENERGY_MAX   = 200.0
-HUNTER_DEPLETE      = 0.5
-HUNTER_MOVE_COST    = 0.2
-HUNTER_BREED_THRESH = 150.0
-HUNTER_BREED_COOL   = 20
-HUNTER_MAX_AGE      = 200
-HUNTER_FOOD_GAIN    = 40.0
-HUNTER_SPAWN_COUNT  = 2
-HUNTER_HUNT_RADIUS  = 0.06
-MAX_HUNTERS         = 120
-MIN_HUNTERS         = 4
+HUNTER_INIT       = 15
+HUNTER_MAX        = 150
+HUNTER_MIN        = 4
+HUNTER_ENERGY     = 60.0
+HUNTER_COST       = 0.6
+HUNTER_FEED_GAIN  = 35.0
+HUNTER_BREED_E    = 120.0
+HUNTER_BREED_COOL = 18
+HUNTER_MAX_AGE    = 150
+HUNTER_FIELD_RANGE= 8.0
+
+# Brownian motion
+BASE_TUMBLE       = 0.4      # base probability of changing direction per cycle
+BASE_STEP         = 0.8      # base step size in grid cells
+
+# Chemokinesis — field presence increases agitation, not direction
+CHEMO_BOOST       = 2.5      # multiplier on step size when in field
+CHEMO_TUMBLE_SUPP = 0.5      # field suppresses tumbling (move more straight)
+
+# Somatic mutation
+SOMATIC_PROB      = 0.0002   # probability per entity per cycle of random genome change
+SOMATIC_SCALE     = 0.08     # magnitude of change
 
 # Field physics
-FIELD_RANGE         = 0.25      # max radius of field influence
-FIELD_DECAY         = 0.85      # field strength falls off with distance
-EMIT_MODULATION     = 0.3       # how much proximity to bloom modulates hunter emission
+FIELD_DECAY       = 0.88     # field strength falloff per unit distance
+RESIDUE_DECAY     = 0.96     # residue decay per cycle
 
-# Behaviour modification tracking
-BM_WINDOW           = 500       # cycles to measure behaviour modification over
-BM_SAMPLE_INTERVAL  = 50        # sample every N cycles
+# Contact feeding
+CONTACT_RADIUS    = 0.6      # grid cells — must be very close
 
-# ── Geometry ─────────────────────────────────────────────────────────────────
+# Behaviour modification sampling
+BM_INTERVAL       = 100      # sample every N cycles
+BM_WINDOW         = 200      # keep last N samples
 
-def angular_distance(a, b):
-    """Great circle distance between two (theta, phi) positions."""
-    t1, p1 = a
-    t2, p2 = b
-    x1 = math.sin(t1) * math.cos(p1)
-    y1 = math.sin(t1) * math.sin(p1)
-    z1 = math.cos(t1)
-    x2 = math.sin(t2) * math.cos(p2)
-    y2 = math.sin(t2) * math.sin(p2)
-    z2 = math.cos(t2)
-    dot = max(-1.0, min(1.0, x1*x2 + y1*y2 + z1*z2))
-    return math.acos(dot)
+# ═══════════════════════════════════════════════════════════════════════════════
+# GEOMETRY — toroidal 2D grid
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def move_toward(pos, target, step):
-    """Move pos toward target by step radians."""
-    dist = angular_distance(pos, target)
-    if dist < 0.001:
-        return pos
-    t = min(step / dist, 1.0)
-    t1, p1 = pos
-    t2, p2 = target
-    theta = t1 + t * (t2 - t1)
-    # Handle phi wrap
-    dp = (p2 - p1 + math.pi) % (2 * math.pi) - math.pi
-    phi = p1 + t * dp
-    return (theta % math.pi, phi % (2 * math.pi))
+def wrap(x):
+    return x % GRID
+
+def dist(a, b):
+    dx = abs(a[0] - b[0])
+    dy = abs(a[1] - b[1])
+    dx = min(dx, GRID - dx)
+    dy = min(dy, GRID - dy)
+    return math.sqrt(dx*dx + dy*dy)
 
 def random_pos():
-    theta = math.acos(1 - 2 * random.random())
-    phi   = random.uniform(0, 2 * math.pi)
-    return (theta, phi)
+    return [random.uniform(0, GRID), random.uniform(0, GRID)]
 
-def perturb(pos, scale=0.05):
-    t, p = pos
-    return (
-        max(0.01, min(math.pi - 0.01, t + random.gauss(0, scale))),
-        (p + random.gauss(0, scale)) % (2 * math.pi)
-    )
+def perturb_pos(pos, scale=1.0):
+    angle = random.uniform(0, 2 * math.pi)
+    step  = random.gauss(scale, scale * 0.3)
+    return [wrap(pos[0] + math.cos(angle) * step),
+            wrap(pos[1] + math.sin(angle) * step)]
 
-def grid_key(pos):
-    """Map (theta, phi) to a residue grid cell."""
-    t, p = pos
-    row = int(t / math.pi * RESIDUE_GRID)
-    col = int(p / (2 * math.pi) * RESIDUE_GRID)
-    return (min(row, RESIDUE_GRID-1), min(col, RESIDUE_GRID-1))
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENOMES
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# ── Genomes ───────────────────────────────────────────────────────────────────
-
-def mutate(val, scale=0.05, lo=0.01, hi=1.0):
-    return max(lo, min(hi, val + random.gauss(0, scale)))
-
-def bloom_genome(parent=None):
-    if parent:
-        g = parent["genome"]
-        return {
-            "emit_freq":       mutate(g["emit_freq"],      0.03, 0.05, 1.0),
-            "emit_amplitude":  mutate(g["emit_amplitude"], 0.05, 0.1,  1.0),
-            "residue_strength":mutate(g["residue_strength"],0.05,0.1,  1.0),
-        }
-    return {
-        "emit_freq":        random.uniform(0.3, 0.7),
-        "emit_amplitude":   random.uniform(0.4, 0.8),
-        "residue_strength": random.uniform(0.3, 0.7),
-    }
+def mutate(v, scale=0.05, lo=0.01, hi=2.0):
+    return max(lo, min(hi, v + random.gauss(0, scale)))
 
 def grazer_genome(parent=None):
     if parent:
         g = parent["genome"]
         return {
-            "bloom_sensitivity":   mutate(g["bloom_sensitivity"],   0.05),
-            "residue_sensitivity": mutate(g["residue_sensitivity"], 0.05),
-            "speed":               mutate(g["speed"],               0.003, 0.005, 0.08),
-            "emit_suppression":    mutate(g["emit_suppression"],    0.05),
+            "tumble_rate":        mutate(g["tumble_rate"],       0.04, 0.05, 0.95),
+            "step_size":          mutate(g["step_size"],         0.05, 0.2,  2.0),
+            "field_sensitivity":  mutate(g["field_sensitivity"], 0.05, 0.01, 2.0),
+            "emit_strength":      mutate(g["emit_strength"],     0.04, 0.01, 1.0),
         }
     return {
-        "bloom_sensitivity":   random.uniform(0.3, 0.8),
-        "residue_sensitivity": random.uniform(0.1, 0.5),
-        "speed":               random.uniform(0.01, 0.04),
-        "emit_suppression":    random.uniform(0.1, 0.5),
+        "tumble_rate":       random.uniform(0.2, 0.7),
+        "step_size":         random.uniform(0.4, 1.2),
+        "field_sensitivity": random.uniform(0.1, 0.8),
+        "emit_strength":     random.uniform(0.1, 0.6),
     }
 
 def hunter_genome(parent=None):
     if parent:
         g = parent["genome"]
         return {
-            "emit_freq":           mutate(g["emit_freq"],           0.03, 0.05, 1.5),
-            "emit_amplitude":      mutate(g["emit_amplitude"],      0.05, 0.1,  1.0),
-            "field_sensitivity":   mutate(g["field_sensitivity"],   0.05),
-            "residue_sensitivity": mutate(g["residue_sensitivity"], 0.05),
-            "memory_length":       max(2, int(g["memory_length"] + random.randint(-1, 1))),
-            "response_threshold":  mutate(g["response_threshold"],  0.05, 0.05, 0.9),
-            "speed":               mutate(g["speed"],               0.003, 0.01, 0.1),
+            "tumble_rate":        mutate(g["tumble_rate"],        0.04, 0.05, 0.95),
+            "step_size":          mutate(g["step_size"],          0.05, 0.3,  2.5),
+            "field_sensitivity":  mutate(g["field_sensitivity"],  0.05, 0.01, 2.0),
+            "emit_freq":          mutate(g["emit_freq"],          0.03, 0.05, 1.5),
+            "emit_amplitude":     mutate(g["emit_amplitude"],     0.04, 0.1,  1.5),
+            "chemo_response":     mutate(g["chemo_response"],     0.05, 0.1,  3.0),
         }
     return {
-        "emit_freq":           random.uniform(0.2, 0.8),
-        "emit_amplitude":      random.uniform(0.3, 0.8),
-        "field_sensitivity":   random.uniform(0.2, 0.8),
-        "residue_sensitivity": random.uniform(0.1, 0.6),
-        "memory_length":       random.randint(3, 12),
-        "response_threshold":  random.uniform(0.1, 0.5),
-        "speed":               random.uniform(0.02, 0.06),
+        "tumble_rate":       random.uniform(0.2, 0.7),
+        "step_size":         random.uniform(0.5, 1.5),
+        "field_sensitivity": random.uniform(0.1, 0.9),
+        "emit_freq":         random.uniform(0.1, 0.9),
+        "emit_amplitude":    random.uniform(0.2, 1.0),
+        "chemo_response":    random.uniform(0.3, 1.5),
     }
 
-# ── Entity factories ──────────────────────────────────────────────────────────
+def somatic_mutate(genome):
+    """Random mid-life genome change — mostly harmful, occasionally not."""
+    key = random.choice(list(genome.keys()))
+    genome[key] = mutate(genome[key], SOMATIC_SCALE)
+    return genome
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTITY FACTORIES
+# ═══════════════════════════════════════════════════════════════════════════════
 
 _uid = 0
-def new_id(prefix="e"):
-    global _uid
-    _uid += 1
-    return f"{prefix}{_uid}"
+def new_id(p="e"):
+    global _uid; _uid += 1; return f"{p}{_uid}"
 
-def new_vent(pos=None):
+def new_hotspot(pos=None):
     return {
-        "id":       new_id("v"),
-        "pos":      pos or random_pos(),
-        "energy":   TOTAL_ENERGY / N_VENTS,
-        "age":      0,
-        "lifetime": VENT_LIFETIME + random.randint(-1000, 1000),
-        "drift":    (random.gauss(0, VENT_MIGRATE_RATE),
-                     random.gauss(0, VENT_MIGRATE_RATE)),
+        "id":    new_id("h"),
+        "pos":   pos or random_pos(),
+        "drift": [random.gauss(0, HOTSPOT_DRIFT), random.gauss(0, HOTSPOT_DRIFT)],
+        "energy": TOTAL_ENERGY / N_HOTSPOTS,
     }
 
-def new_bloom(pos=None, parent=None):
+def new_bloom(pos=None):
     return {
         "id":     new_id("bl"),
         "pos":    pos or random_pos(),
-        "energy": BLOOM_ENERGY_START,
+        "energy": random.uniform(20, BLOOM_ENERGY_MAX),
         "age":    0,
-        "genome": bloom_genome(parent),
     }
 
 def new_grazer(pos=None, parent=None, energy=None):
     return {
-        "id":          new_id("g"),
-        "pos":         pos or random_pos(),
-        "energy":      energy or GRAZER_ENERGY_START,
-        "age":         0,
-        "breed_cool":  0,
-        "genome":      grazer_genome(parent),
-        "generation":  (parent["generation"] + 1) if parent else 0,
+        "id":         new_id("g"),
+        "pos":        pos or random_pos(),
+        "energy":     energy or GRAZER_ENERGY,
+        "age":        0,
+        "breed_cool": 0,
+        "genome":     grazer_genome(parent),
+        "generation": (parent["generation"] + 1) if parent else 0,
+        "heading":    random.uniform(0, 2 * math.pi),
+        "contacts":   0,   # bloom contacts — fitness proxy
     }
 
 def new_hunter(pos=None, parent=None, energy=None):
     return {
-        "id":              new_id("h"),
-        "pos":             pos or random_pos(),
-        "energy":          energy or HUNTER_ENERGY_START,
-        "age":             0,
-        "breed_cool":      0,
-        "genome":          hunter_genome(parent),
-        "generation":      (parent["generation"] + 1) if parent else 0,
-        # field state
-        "emit_state":      0.0,    # current emission (modulated by environment)
-        "field_received":  0.0,    # field received from other hunters last cycle
-        # behaviour modification tracking
-        "pos_before":      None,   # position before receiving field signal
-        "signal_received": False,
-        # memory: recent bloom/food positions
-        "memory":          deque(maxlen=12),
-        # stats
-        "kills":           0,
-        "bloom_hits":      0,
+        "id":          new_id("hu"),
+        "pos":         pos or random_pos(),
+        "energy":      energy or HUNTER_ENERGY,
+        "age":         0,
+        "breed_cool":  0,
+        "genome":      hunter_genome(parent),
+        "generation":  (parent["generation"] + 1) if parent else 0,
+        "heading":     random.uniform(0, 2 * math.pi),
+        "emit_state":  0.0,   # current field emission (modulated by energy state)
+        "field_rx":    0.0,   # field received last cycle
+        "pos_before":  None,  # for BM measurement
+        "contacts":    0,     # grazer contacts — fitness proxy
+        "kills":       0,
     }
 
-# ── World state ───────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORLD
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class World:
     def __init__(self):
-        self.cycle          = 0
-        self.generation     = 0   # hunter generation counter
-        self.vents          = {e["id"]: e for e in [new_vent() for _ in range(N_VENTS)]}
-        self.blooms         = {e["id"]: e for e in [new_bloom() for _ in range(N_BLOOMS_INIT)]}
-        self.grazers        = {e["id"]: e for e in [new_grazer() for _ in range(N_GRAZERS_INIT)]}
-        self.hunters        = {e["id"]: e for e in [new_hunter() for _ in range(N_HUNTERS_INIT)]}
-        self.residue        = {}   # grid_key -> float (energy residue)
-        self.energy_pool    = TOTAL_ENERGY  # planetary reserve
-        self.next_vent_spawn = VENT_SPAWN_INTERVAL
-        self.births         = {"bloom": 0, "grazer": 0, "hunter": 0}
-        self.deaths         = {"bloom": 0, "grazer": 0, "hunter": 0}
-        self.total_signals  = 0
-        # behaviour modification log
-        self.bm_log         = deque(maxlen=BM_WINDOW // BM_SAMPLE_INTERVAL)
-        self.hunter_gen_stats = []  # per-generation summary
+        self.cycle       = 0
+        self.generation  = 0
+        self.energy_pool = TOTAL_ENERGY
+        self.hotspots    = {e["id"]: e for e in [new_hotspot() for _ in range(N_HOTSPOTS)]}
+        self.blooms      = {e["id"]: e for e in [new_bloom()   for _ in range(BLOOM_INIT)]}
+        self.grazers     = {e["id"]: e for e in [new_grazer()  for _ in range(GRAZER_INIT)]}
+        self.hunters     = {e["id"]: e for e in [new_hunter()  for _ in range(HUNTER_INIT)]}
+        # Residue grid — 2D array
+        self.residue     = [[0.0]*GRID for _ in range(GRID)]
+        # Stats
+        self.total_signals = 0
+        self.bm_log        = deque(maxlen=BM_WINDOW)
+        self.births        = {"grazer": 0, "hunter": 0, "bloom": 0}
+        self.deaths        = {"grazer": 0, "hunter": 0, "bloom": 0}
+        self.max_hunter_gen = 0
 
-    # ── Residue field ─────────────────────────────────────────────────────────
+    # ── Residue ───────────────────────────────────────────────────────────────
 
     def add_residue(self, pos, amount):
-        k = grid_key(pos)
-        self.residue[k] = self.residue.get(k, 0.0) + amount
+        x, y = int(pos[0]) % GRID, int(pos[1]) % GRID
+        self.residue[x][y] = min(50.0, self.residue[x][y] + amount)
 
     def get_residue(self, pos):
-        return self.residue.get(grid_key(pos), 0.0)
+        x, y = int(pos[0]) % GRID, int(pos[1]) % GRID
+        return self.residue[x][y]
 
     def decay_residue(self):
-        dead = [k for k, v in self.residue.items() if v < 0.01]
-        for k in dead:
-            del self.residue[k]
-        for k in self.residue:
-            self.residue[k] *= RESIDUE_DECAY
+        for x in range(GRID):
+            for y in range(GRID):
+                v = self.residue[x][y]
+                if v > 0.01:
+                    self.residue[x][y] = v * RESIDUE_DECAY
+                else:
+                    self.residue[x][y] = 0.0
 
-    # ── Planetary field step ──────────────────────────────────────────────────
+    # ── Field strength at a point ─────────────────────────────────────────────
 
-    def step_vents(self):
-        # Drift vents
-        for v in self.vents.values():
-            dt, dp = v["drift"]
-            t, p = v["pos"]
-            v["pos"] = (
-                max(0.01, min(math.pi - 0.01, t + dt + random.gauss(0, 0.0001))),
-                (p + dp + random.gauss(0, 0.0001)) % (2 * math.pi)
-            )
-            v["age"] += 1
+    def bloom_field_at(self, pos):
+        """Combined bloom field strength at pos."""
+        total = 0.0
+        for bl in self.blooms.values():
+            d = dist(pos, bl["pos"])
+            if d < BLOOM_FIELD_RANGE:
+                total += (bl["energy"] / BLOOM_ENERGY_MAX) * (FIELD_DECAY ** d)
+        return total
+
+    def grazer_field_at(self, pos):
+        """Combined grazer field at pos."""
+        total = 0.0
+        for gz in list(self.grazers.values()):
+            d = dist(pos, gz["pos"])
+            if d < GRAZER_FIELD_RANGE:
+                total += gz["genome"]["emit_strength"] * (FIELD_DECAY ** d)
+        return total
+
+    def hunter_field_at(self, pos, exclude_id=None):
+        """Combined hunter field emission at pos."""
+        total = 0.0
+        for h in self.hunters.values():
+            if h["id"] == exclude_id:
+                continue
+            d = dist(pos, h["pos"])
+            if d < HUNTER_FIELD_RANGE:
+                strength = h["emit_state"] * (FIELD_DECAY ** d)
+                total += strength
+                if strength > 0.01:
+                    self.total_signals += 1
+        return total
+
+    # ── Brownian motion with chemokinesis ─────────────────────────────────────
+
+    def move_entity(self, entity, field_strength, genome_key="genome"):
+        """
+        Pure physics movement.
+        - Random tumble with probability tumble_rate
+        - Step size boosted by field_strength (chemokinesis)
+        - No target. No direction preference.
+        """
+        g = entity[genome_key]
+        tumble_rate = g["tumble_rate"]
+        step_size   = g["step_size"]
+
+        # Chemokinesis: field presence boosts movement, suppresses tumbling
+        chemo = field_strength * g.get("chemo_response", 1.0)
+        effective_step   = step_size * (1.0 + chemo * CHEMO_BOOST)
+        effective_tumble = tumble_rate * max(0.1, 1.0 - chemo * CHEMO_TUMBLE_SUPP)
+
+        # Tumble — change heading randomly
+        if random.random() < effective_tumble:
+            entity["heading"] = random.uniform(0, 2 * math.pi)
+
+        # Step in current heading with noise
+        angle = entity["heading"] + random.gauss(0, 0.3)
+        step  = abs(random.gauss(effective_step, effective_step * 0.3))
+
+        entity["pos"] = [
+            wrap(entity["pos"][0] + math.cos(angle) * step),
+            wrap(entity["pos"][1] + math.sin(angle) * step),
+        ]
+
+    # ── Planetary hotspot step ────────────────────────────────────────────────
+
+    def step_hotspots(self):
+        for hs in self.hotspots.values():
+            # Drift
+            hs["pos"][0] = wrap(hs["pos"][0] + hs["drift"][0] + random.gauss(0, 0.02))
+            hs["pos"][1] = wrap(hs["pos"][1] + hs["drift"][1] + random.gauss(0, 0.02))
+            # Slowly change drift direction
+            if random.random() < 0.01:
+                hs["drift"] = [random.gauss(0, HOTSPOT_DRIFT), random.gauss(0, HOTSPOT_DRIFT)]
             # Release energy to nearby blooms
             for bl in self.blooms.values():
-                d = angular_distance(v["pos"], bl["pos"])
-                if d < 0.15:
-                    gain = VENT_ENERGY_OUTPUT * (1 - d / 0.15)
+                d = dist(hs["pos"], bl["pos"])
+                if d < HOTSPOT_RADIUS:
+                    gain = HOTSPOT_OUTPUT * (1 - d / HOTSPOT_RADIUS)
                     bl["energy"] = min(BLOOM_ENERGY_MAX, bl["energy"] + gain)
                     self.energy_pool -= gain
-
-        # Kill old vents — return energy to pool
-        dead = [vid for vid, v in self.vents.items() if v["age"] > v["lifetime"]]
-        for vid in dead:
-            self.energy_pool += self.vents[vid]["energy"] * 0.5
-            del self.vents[vid]
-
-        # Spawn new vents
-        self.next_vent_spawn -= 1
-        if self.next_vent_spawn <= 0 and len(self.vents) < N_VENTS:
-            self.vents[new_id("v")] = new_vent()
-            self.next_vent_spawn = VENT_SPAWN_INTERVAL
 
     # ── Bloom step ────────────────────────────────────────────────────────────
 
     def step_blooms(self):
         dead = []
-        for bid, bl in self.blooms.items():
+        for bid, bl in list(self.blooms.items()):
             bl["age"]    += 1
-            bl["energy"] -= 0.2  # baseline metabolic cost
-
-            # Drift toward nearest vent (blooms follow energy gradient)
-            nearest_vent = min(
-                self.vents.values(),
-                key=lambda v: angular_distance(v["pos"], bl["pos"]),
-                default=None
-            )
-            if nearest_vent:
-                bl["pos"] = move_toward(
-                    bl["pos"], nearest_vent["pos"],
-                    0.003 + random.gauss(0, 0.001)
-                )
+            bl["energy"] -= 0.15
 
             # Emit residue
-            g = bl["genome"]
-            self.add_residue(bl["pos"], g["residue_strength"] * g["emit_amplitude"])
+            self.add_residue(bl["pos"], BLOOM_RESIDUE)
 
-            if bl["energy"] <= 0 or bl["age"] > BLOOM_LIFETIME:
+            if bl["energy"] <= 0:
                 dead.append(bid)
-                # Marine snow — death pulse
-                self.add_residue(bl["pos"], BLOOM_DEATH_RESIDUE * g["residue_strength"])
-                self.energy_pool += bl["energy"] * 0.3
+                self.add_residue(bl["pos"], BLOOM_DEATH_PULSE)
+                self.energy_pool += bl["energy"] * 0.2
                 self.deaths["bloom"] += 1
 
         for bid in dead:
             del self.blooms[bid]
 
-        # Maintain minimum blooms
-        if len(self.blooms) < MIN_BLOOMS:
+        # Maintain population
+        while len(self.blooms) < BLOOM_MIN:
             nb = new_bloom()
             self.blooms[nb["id"]] = nb
             self.births["bloom"] += 1
-        elif len(self.blooms) < MAX_BLOOMS and random.random() < 0.005:
+
+        if len(self.blooms) < BLOOM_MAX and random.random() < 0.008:
             nb = new_bloom()
             self.blooms[nb["id"]] = nb
             self.births["bloom"] += 1
@@ -380,397 +384,302 @@ class World:
     # ── Grazer step ───────────────────────────────────────────────────────────
 
     def step_grazers(self):
-        alive = list(self.grazers.values())
-        random.shuffle(alive)
+        alive    = list(self.grazers.values())
         new_born = []
-        dead = []
+        dead     = []
+        random.shuffle(alive)
 
         for gz in alive:
             gz["age"]        += 1
-            gz["energy"]     -= GRAZER_DEPLETE
+            gz["energy"]     -= GRAZER_COST
             gz["breed_cool"]  = max(0, gz["breed_cool"] - 1)
-            g = gz["genome"]
 
-            # Find best target: bloom field or residue trail
-            best_target = None
-            best_score  = -1
+            # Field at current position
+            field = (self.bloom_field_at(gz["pos"]) * gz["genome"]["field_sensitivity"]
+                     + self.get_residue(gz["pos"]) * 0.1)
 
+            # Somatic mutation
+            if random.random() < SOMATIC_PROB:
+                gz["genome"] = somatic_mutate(gz["genome"])
+
+            # Move — pure Brownian + chemokinesis
+            self.move_entity(gz, field)
+
+            # Feed — contact only
             for bl in self.blooms.values():
-                d = angular_distance(gz["pos"], bl["pos"])
-                if d < FIELD_RANGE:
-                    score = (g["bloom_sensitivity"] *
-                             bl["genome"]["emit_amplitude"] *
-                             (1 - d / FIELD_RANGE))
-                    if score > best_score:
-                        best_score  = score
-                        best_target = bl["pos"]
-
-            # Residue sensitivity
-            res = self.get_residue(gz["pos"])
-            if res * g["residue_sensitivity"] > best_score:
-                # Move toward highest residue neighbour
-                best_target = perturb(gz["pos"], 0.08)
-
-            if best_target:
-                gz["pos"] = move_toward(gz["pos"], best_target,
-                                        g["speed"] - GRAZER_MOVE_COST * 0.01)
-            else:
-                gz["pos"] = perturb(gz["pos"], g["speed"])
-
-            # Feed on bloom
-            for bl in self.blooms.values():
-                d = angular_distance(gz["pos"], bl["pos"])
-                if d < 0.05:
-                    gain = min(GRAZER_FOOD_GAIN, bl["energy"] * 0.1)
-                    gz["energy"] = min(GRAZER_ENERGY_MAX, gz["energy"] + gain)
+                if dist(gz["pos"], bl["pos"]) < CONTACT_RADIUS:
+                    gain = min(GRAZER_FEED_GAIN, bl["energy"] * 0.15)
+                    gz["energy"] = min(BLOOM_ENERGY_MAX, gz["energy"] + gain)
                     bl["energy"] -= gain
+                    gz["contacts"] += 1
                     break
 
             # Breed
-            if (gz["energy"] > GRAZER_BREED_THRESH and
+            if (gz["energy"] > GRAZER_BREED_E and
                     gz["breed_cool"] == 0 and
-                    len(self.grazers) + len(new_born) < MAX_GRAZERS):
-                per_child = gz["energy"] * 0.3 / GRAZER_SPAWN_COUNT
-                gz["energy"] *= 0.7
+                    len(self.grazers) + len(new_born) < GRAZER_MAX):
+                per_child = gz["energy"] * 0.25 / 4
+                gz["energy"] *= 0.75
                 gz["breed_cool"] = GRAZER_BREED_COOL
-                for _ in range(GRAZER_SPAWN_COUNT):
+                for _ in range(4):
                     nb = new_grazer(
-                        pos=perturb(gz["pos"], 0.03),
-                        parent=gz,
-                        energy=per_child
-                    )
+                        pos=[wrap(gz["pos"][0] + random.gauss(0, 1)),
+                             wrap(gz["pos"][1] + random.gauss(0, 1))],
+                        parent=gz, energy=per_child)
                     new_born.append(nb)
                     self.births["grazer"] += 1
 
             # Die
             if gz["energy"] <= 0 or gz["age"] > GRAZER_MAX_AGE:
                 dead.append(gz["id"])
-                self.energy_pool += gz["energy"] * 0.2
+                self.energy_pool += max(0, gz["energy"]) * 0.3
+                self.add_residue(gz["pos"], 1.5)
                 self.deaths["grazer"] += 1
-                self.add_residue(gz["pos"], 2.0)  # death residue
 
-        for gz in new_born:
-            self.grazers[gz["id"]] = gz
+        for nb in new_born:
+            self.grazers[nb["id"]] = nb
         for gid in dead:
             del self.grazers[gid]
-
-        # Maintain minimum
-        while len(self.grazers) < MIN_GRAZERS:
-            nb = new_grazer()
-            self.grazers[nb["id"]] = nb
+        while len(self.grazers) < GRAZER_MIN:
+            nb = new_grazer(); self.grazers[nb["id"]] = nb
 
     # ── Hunter step ───────────────────────────────────────────────────────────
 
     def step_hunters(self):
-        alive   = list(self.hunters.values())
+        alive    = list(self.hunters.values())
         new_born = []
-        dead    = []
+        dead     = []
 
-        # ── Phase 1: compute field emissions ─────────────────────────────────
-        # Each hunter's emission is modulated by proximity to blooms/grazers
+        # ── Phase 1: compute emissions ────────────────────────────────────────
+        # Hunter field emission is modulated by energy state — a well-fed hunter
+        # emits differently from a hungry one. Nobody designed this signal.
+        # It is simply a consequence of metabolism.
         for h in alive:
-            g      = h["genome"]
-            base   = g["emit_amplitude"]
-            # Bloom proximity modulates emission
-            bloom_mod = 0.0
-            for bl in self.blooms.values():
-                d = angular_distance(h["pos"], bl["pos"])
-                if d < FIELD_RANGE:
-                    bloom_mod = max(bloom_mod,
-                        bl["genome"]["emit_amplitude"] *
-                        EMIT_MODULATION *
-                        (1 - d / FIELD_RANGE))
-            # Grazer proximity adds further modulation
-            grazer_mod = 0.0
-            for gz in list(self.grazers.values())[:50]:  # sample for performance
-                d = angular_distance(h["pos"], gz["pos"])
-                if d < HUNTER_HUNT_RADIUS:
-                    grazer_mod = min(0.3, grazer_mod + 0.05 * (1 - d / HUNTER_HUNT_RADIUS))
+            g = h["genome"]
+            energy_fraction = h["energy"] / HUNTER_ENERGY  # 0..N
+            # Emission: amplitude modulated by energy, frequency fixed by genome
+            h["emit_state"] = g["emit_amplitude"] * min(2.0, energy_fraction) * \
+                              (0.5 + 0.5 * math.sin(self.cycle * g["emit_freq"]))
 
-            h["emit_state"] = base + bloom_mod + grazer_mod
-
-        # ── Phase 2: receive fields from other hunters ────────────────────────
+        # ── Phase 2: receive fields ───────────────────────────────────────────
         for h in alive:
-            g              = h["genome"]
-            received       = 0.0
-            h["pos_before"] = h["pos"]  # snapshot before signal influences move
+            g = h["genome"]
+            h["pos_before"] = list(h["pos"])
 
-            for other in alive:
-                if other["id"] == h["id"]:
-                    continue
-                d = angular_distance(h["pos"], other["pos"])
-                if d < FIELD_RANGE:
-                    strength = (other["emit_state"] *
-                                (FIELD_DECAY ** (d / FIELD_RANGE * 10)) *
-                                g["field_sensitivity"])
-                    received += strength
-                    self.total_signals += 1
+            # Field received: from other hunters + blooms + residue
+            hunter_field = self.hunter_field_at(h["pos"], exclude_id=h["id"])
+            bloom_field  = self.bloom_field_at(h["pos"])
+            residue      = self.get_residue(h["pos"])
+            grazer_field = self.grazer_field_at(h["pos"])
 
-            h["field_received"]  = received
-            h["signal_received"] = received > g["response_threshold"]
+            h["field_rx"] = (hunter_field * g["field_sensitivity"] +
+                             bloom_field  * g["field_sensitivity"] * 0.5 +
+                             grazer_field * g["field_sensitivity"] * 0.8 +
+                             residue      * 0.05)
 
         # ── Phase 3: move, feed, breed, die ──────────────────────────────────
         random.shuffle(alive)
         for h in alive:
             h["age"]        += 1
-            h["energy"]     -= HUNTER_DEPLETE
+            h["energy"]     -= HUNTER_COST
             h["breed_cool"]  = max(0, h["breed_cool"] - 1)
-            g = h["genome"]
 
-            # Determine movement target
-            best_target = None
-            best_score  = -1
+            # Somatic mutation
+            if random.random() < SOMATIC_PROB:
+                h["genome"] = somatic_mutate(h["genome"])
 
-            # Direct grazer detection
-            for gz in list(self.grazers.values()):
-                d = angular_distance(h["pos"], gz["pos"])
-                if d < HUNTER_HUNT_RADIUS * 2:
-                    score = (1 - d / (HUNTER_HUNT_RADIUS * 2))
-                    if score > best_score:
-                        best_score  = score
-                        best_target = gz["pos"]
+            # Move — pure Brownian + chemokinesis from all received fields
+            self.move_entity(h, h["field_rx"])
 
-            # Field signal from other hunters — does it modify behaviour?
-            if h["signal_received"] and best_target is None:
-                # Follow the field gradient — move toward strongest emitter
-                best_emitter = None
-                best_strength = 0.0
-                for other in alive:
-                    if other["id"] == h["id"]:
-                        continue
-                    d = angular_distance(h["pos"], other["pos"])
-                    if d < FIELD_RANGE:
-                        s = other["emit_state"] * g["field_sensitivity"]
-                        if s > best_strength:
-                            best_strength = s
-                            best_emitter  = other["pos"]
-                if best_emitter:
-                    best_target = best_emitter
+            # Leave emission trace
+            self.add_residue(h["pos"], h["emit_state"] * 0.05)
 
-            # Residue trail
-            if best_target is None:
-                res = self.get_residue(h["pos"])
-                if res * g["residue_sensitivity"] > 0.1:
-                    best_target = perturb(h["pos"], 0.1)
-
-            # Memory — last known food positions
-            if best_target is None and h["memory"]:
-                best_target = h["memory"][-1]
-
-            # Random patrol
-            if best_target is None:
-                best_target = perturb(h["pos"], g["speed"] * 2)
-
-            h["pos"] = move_toward(h["pos"], best_target,
-                                   g["speed"] - HUNTER_MOVE_COST * 0.01)
-
-            # Leave emission residue
-            self.add_residue(h["pos"], h["emit_state"] * 0.1)
-
-            # Hunt
-            hunted = False
+            # Feed — contact only with grazers
             for gid, gz in list(self.grazers.items()):
-                d = angular_distance(h["pos"], gz["pos"])
-                if d < HUNTER_HUNT_RADIUS * 0.5:
-                    h["energy"] = min(HUNTER_ENERGY_MAX,
-                                      h["energy"] + HUNTER_FOOD_GAIN)
-                    h["kills"] += 1
-                    h["memory"].append(gz["pos"])  # remember where food was
+                if dist(h["pos"], gz["pos"]) < CONTACT_RADIUS:
+                    h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + HUNTER_FEED_GAIN)
+                    h["contacts"] += 1
+                    h["kills"]     += 1
                     del self.grazers[gid]
                     self.deaths["grazer"] += 1
-                    hunted = True
+                    self.add_residue(h["pos"], 3.0)
                     break
 
             # Breed
-            if (h["energy"] > HUNTER_BREED_THRESH and
+            if (h["energy"] > HUNTER_BREED_E and
                     h["breed_cool"] == 0 and
-                    len(self.hunters) + len(new_born) < MAX_HUNTERS):
-                per_child = h["energy"] * 0.3 / HUNTER_SPAWN_COUNT
-                h["energy"] *= 0.7
+                    len(self.hunters) + len(new_born) < HUNTER_MAX):
+                per_child = h["energy"] * 0.25 / 2
+                h["energy"] *= 0.75
                 h["breed_cool"] = HUNTER_BREED_COOL
-                for _ in range(HUNTER_SPAWN_COUNT):
+                for _ in range(2):
                     nb = new_hunter(
-                        pos=perturb(h["pos"], 0.04),
-                        parent=h,
-                        energy=per_child
-                    )
+                        pos=[wrap(h["pos"][0] + random.gauss(0, 1.5)),
+                             wrap(h["pos"][1] + random.gauss(0, 1.5))],
+                        parent=h, energy=per_child)
                     new_born.append(nb)
                     self.births["hunter"] += 1
-                    if nb["generation"] > self.generation:
-                        self.generation = nb["generation"]
+                    if nb["generation"] > self.max_hunter_gen:
+                        self.max_hunter_gen = nb["generation"]
 
             # Die
             if h["energy"] <= 0 or h["age"] > HUNTER_MAX_AGE:
                 dead.append(h["id"])
-                self.energy_pool += h["energy"] * 0.3
-                self.deaths["hunter"] += 1
+                self.energy_pool += max(0, h["energy"]) * 0.4
                 self.add_residue(h["pos"], 5.0)
+                self.deaths["hunter"] += 1
 
-        for h in new_born:
-            self.hunters[h["id"]] = h
+        for nb in new_born:
+            self.hunters[nb["id"]] = nb
         for hid in dead:
             del self.hunters[hid]
-
-        while len(self.hunters) < MIN_HUNTERS:
-            nb = new_hunter()
-            self.hunters[nb["id"]] = nb
+        while len(self.hunters) < HUNTER_MIN:
+            nb = new_hunter(); self.hunters[nb["id"]] = nb
 
     # ── Behaviour modification measurement ───────────────────────────────────
 
-    def measure_behaviour_modification(self):
+    def measure_bm(self):
         """
-        For each hunter that received a signal this cycle:
-        did it move toward food vs where it would have gone otherwise?
-        
-        Returns: mean behaviour delta (positive = signal helped)
+        For each hunter: did it move closer to any grazer this cycle?
+        Compare hunters that received a strong field signal vs those that didn't.
+        Delta = improvement in proximity to nearest grazer.
+        Positive = the field environment (including other hunters' signals)
+                   correlated with useful movement.
         """
-        if not self.hunters:
+        if not self.grazers or not self.hunters:
             return 0.0
 
-        deltas = []
+        grazer_positions = [gz["pos"] for gz in self.grazers.values()]
+
+        def nearest_grazer_dist(pos):
+            return min(dist(pos, gp) for gp in grazer_positions)
+
+        with_signal  = []
+        without_signal = []
+
         for h in self.hunters.values():
-            if not h["signal_received"] or h["pos_before"] is None:
+            if h["pos_before"] is None:
                 continue
-            if not h["memory"]:
-                continue
+            d_before = nearest_grazer_dist(h["pos_before"])
+            d_after  = nearest_grazer_dist(h["pos"])
+            delta    = d_before - d_after  # positive = moved closer
 
-            last_food = h["memory"][-1]
-            # Distance to food before signal influenced move
-            d_before = angular_distance(h["pos_before"], last_food)
-            # Distance to food after move
-            d_after  = angular_distance(h["pos"], last_food)
-            # Positive delta = moved closer to food = signal was useful
-            delta = d_before - d_after
-            deltas.append(delta)
+            if h["field_rx"] > 0.3:
+                with_signal.append(delta)
+            else:
+                without_signal.append(delta)
 
-        return sum(deltas) / len(deltas) if deltas else 0.0
+        if not with_signal or not without_signal:
+            return 0.0
+
+        mean_with    = sum(with_signal)    / len(with_signal)
+        mean_without = sum(without_signal) / len(without_signal)
+
+        # Positive = hunters receiving signals moved closer to food
+        # than hunters not receiving signals
+        return round(mean_with - mean_without, 6)
 
     # ── Main step ─────────────────────────────────────────────────────────────
 
     def step(self):
         self.cycle += 1
-        self.step_vents()
+        self.step_hotspots()
         self.step_blooms()
         self.decay_residue()
         self.step_grazers()
         self.step_hunters()
 
-        # Sample behaviour modification
-        if self.cycle % BM_SAMPLE_INTERVAL == 0:
-            bm = self.measure_behaviour_modification()
+        if self.cycle % BM_INTERVAL == 0:
+            bm = self.measure_bm()
             self.bm_log.append({
-                "cycle": self.cycle,
-                "bm":    round(bm, 6),
-                "signals": self.total_signals,
+                "cycle":   self.cycle,
+                "bm":      bm,
                 "hunters": len(self.hunters),
                 "grazers": len(self.grazers),
+                "signals": self.total_signals,
             })
 
-    def bm_trend(self):
-        """Is behaviour modification increasing over recent samples?"""
-        if len(self.bm_log) < 4:
-            return 0.0
-        vals = [x["bm"] for x in self.bm_log]
-        # Simple linear trend
-        n    = len(vals)
-        mean = sum(vals) / n
-        xs   = list(range(n))
-        xm   = sum(xs) / n
-        num  = sum((xs[i] - xm) * (vals[i] - mean) for i in range(n))
-        den  = sum((xs[i] - xm) ** 2 for i in range(n))
-        return round(num / den, 8) if den else 0.0
-
     def summary(self):
-        bm_recent = list(self.bm_log)[-1]["bm"] if self.bm_log else 0.0
+        bm_recent = self.bm_log[-1]["bm"] if self.bm_log else 0.0
+        # Trend over last 10 samples
+        vals = [x["bm"] for x in self.bm_log][-10:]
+        trend = 0.0
+        if len(vals) >= 4:
+            n = len(vals); xm = (n-1)/2
+            num = sum((i - xm) * vals[i] for i in range(n))
+            den = sum((i - xm)**2 for i in range(n))
+            trend = round(num/den, 8) if den else 0.0
         return {
-            "cycle":           self.cycle,
-            "generation":      self.generation,
-            "vents":           len(self.vents),
-            "blooms":          len(self.blooms),
-            "grazers":         len(self.grazers),
-            "hunters":         len(self.hunters),
-            "total_signals":   self.total_signals,
-            "bm_recent":       round(bm_recent, 6),
-            "bm_trend":        self.bm_trend(),
-            "energy_pool":     round(self.energy_pool, 1),
-            "births":          dict(self.births),
-            "deaths":          dict(self.deaths),
-            "residue_cells":   len(self.residue),
-            "bm_log":          list(self.bm_log)[-20:],
+            "cycle":          self.cycle,
+            "generation":     self.max_hunter_gen,
+            "hotspots":       len(self.hotspots),
+            "blooms":         len(self.blooms),
+            "grazers":        len(self.grazers),
+            "hunters":        len(self.hunters),
+            "total_signals":  self.total_signals,
+            "bm_recent":      round(bm_recent, 6),
+            "bm_trend":       trend,
+            "energy_pool":    round(self.energy_pool, 1),
+            "births":         dict(self.births),
+            "deaths":         dict(self.deaths),
+            "bm_log":         list(self.bm_log)[-20:],
         }
 
-# ── Simulation loop ───────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIMULATION LOOP
+# ═══════════════════════════════════════════════════════════════════════════════
 
-world        = World()
-_lock        = threading.Lock()
-_running     = True
-_cache       = {}          # cached summary for HTTP endpoints
-_cache_cycle = -1
-
-STATE_FILE = '/mnt/data/state.json'
+world    = World()
+_lock    = threading.Lock()
+_running = True
+_cache   = {}
 
 def update_cache():
-    global _cache, _cache_cycle
-    with _lock:
-        s = world.summary()
-    _cache       = s
-    _cache_cycle = s["cycle"]
-    try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump(s, f)
-    except Exception as e:
-        log.warning(f"Cache write failed: {e}")
-
-def read_cache():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except:
-        return _cache
+    global _cache
+    _cache = world.summary()
 
 def run_loop():
-    global _running
-    log.info("Origin experiment started — running flat out")
-    report_interval = 1000
-    cache_interval  = 100
-    last_report     = 0
+    log.info("Origin Experiment v2 — running. No move_toward(). Physics only.")
+    last_report = 0
+    update_cache()
 
     while _running:
         world.step()
         c = world.cycle
         if c % 10 == 0:
             update_cache()
-            time.sleep(0)  # yield GIL
-
-        if c - last_report >= report_interval:
+            time.sleep(0)
+        if c - last_report >= 1000:
             s = _cache
             log.info(
                 f"cycle:{s['cycle']:>8} gen:{s['generation']:>4} "
-                f"H:{s['hunters']:>4} G:{s['grazers']:>6} "
-                f"BL:{s['blooms']:>3} V:{s['vents']:>2} "
-                f"signals:{s['total_signals']:>8} "
+                f"H:{s['hunters']:>4} G:{s['grazers']:>5} "
+                f"BL:{s['blooms']:>3} "
+                f"signals:{s['total_signals']:>9} "
                 f"bm:{s['bm_recent']:>+.4f} trend:{s['bm_trend']:>+.6f}"
             )
             last_report = c
 
-update_cache()  # initialise cache before thread starts
+update_cache()
 _thread = threading.Thread(target=run_loop, daemon=True)
 _thread.start()
 
-# ── Flask endpoints ───────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# FLASK ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/field/health")
-def field_health():
-    s = read_cache() if _cache else {}
+def health():
+    s = _cache or {}
     return jsonify({
         "status":        "running",
-        "service":       "origin-experiment",
+        "service":       "origin-experiment-v2",
         "cycle":         s.get("cycle", 0),
         "generation":    s.get("generation", 0),
         "hunters":       s.get("hunters", 0),
         "grazers":       s.get("grazers", 0),
         "blooms":        s.get("blooms", 0),
-        "vents":         s.get("vents", 0),
+        "hotspots":      s.get("hotspots", 0),
         "total_signals": s.get("total_signals", 0),
         "bm_recent":     s.get("bm_recent", 0),
         "bm_trend":      s.get("bm_trend", 0),
@@ -778,15 +687,16 @@ def field_health():
     })
 
 @app.route("/field/summary")
-def field_summary():
-    return jsonify(read_cache())
+def summary():
+    return jsonify(_cache or {})
 
 @app.route("/field/bm")
-def field_bm():
-    """Behaviour modification log — the core experiment output."""
-    s = read_cache()
+def bm():
+    s = _cache or {}
     return jsonify({
         "question":      "Does entity A modify the behaviour of entity B, and by what means?",
+        "version":       2,
+        "method":        "Brownian motion + chemokinesis. Contact feeding. No directed movement.",
         "bm_log":        s.get("bm_log", []),
         "bm_trend":      s.get("bm_trend", 0),
         "total_signals": s.get("total_signals", 0),
@@ -794,32 +704,28 @@ def field_bm():
     })
 
 @app.route("/field/hunters")
-def field_hunters():
-    """Snapshot of hunter genomes — watch evolution in action."""
-    with _lock:
-        hunters = []
-        for h in list(world.hunters.values())[:50]:
-            hunters.append({
-                "id":              h["id"],
-                "generation":      h["generation"],
-                "age":             h["age"],
-                "energy":          round(h["energy"], 1),
-                "kills":           h["kills"],
-                "genome":          {k: round(v, 3) if isinstance(v, float) else v
-                                    for k, v in h["genome"].items()},
-                "emit_state":      round(h["emit_state"], 3),
-                "signal_received": h["signal_received"],
-            })
-    return jsonify({"hunters": hunters, "cycle": world.cycle})
+def hunters():
+    hs = []
+    for h in list(world.hunters.values())[:30]:
+        hs.append({
+            "id":         h["id"],
+            "generation": h["generation"],
+            "age":        h["age"],
+            "energy":     round(h["energy"], 1),
+            "kills":      h["kills"],
+            "emit_state": round(h["emit_state"], 3),
+            "field_rx":   round(h["field_rx"], 3),
+            "genome":     {k: round(v, 3) for k, v in h["genome"].items()},
+        })
+    return jsonify({"hunters": hs, "cycle": world.cycle})
 
 @app.route("/field/stop")
-def field_stop():
-    global _running
-    _running = False
+def stop():
+    global _running; _running = False
     return jsonify({"status": "stopped"})
 
 @app.route("/field/start")
-def field_start():
+def start():
     global _running, _thread
     if not _running:
         _running = True
@@ -829,4 +735,4 @@ def field_start():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host="0.0.0.0", port=port)
