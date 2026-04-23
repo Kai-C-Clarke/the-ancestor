@@ -237,8 +237,9 @@ class World:
         self.blooms      = {e["id"]: e for e in [new_bloom()   for _ in range(BLOOM_INIT)]}
         self.grazers     = {e["id"]: e for e in [new_grazer()  for _ in range(GRAZER_INIT)]}
         self.hunters     = {e["id"]: e for e in [new_hunter()  for _ in range(HUNTER_INIT)]}
-        # Residue grid — 2D array
-        self.residue     = [[0.0]*GRID for _ in range(GRID)]
+        # Residue — sparse dict {(x,y): float}
+        self.residue     = {}
+        self._residue_sparse = self.residue  # alias for decay method
         # Stats
         self.total_signals = 0
         self.bm_log        = deque(maxlen=BM_WINDOW)
@@ -249,21 +250,20 @@ class World:
     # ── Residue ───────────────────────────────────────────────────────────────
 
     def add_residue(self, pos, amount):
-        x, y = int(pos[0]) % GRID, int(pos[1]) % GRID
-        self.residue[x][y] = min(50.0, self.residue[x][y] + amount)
+        k = (int(pos[0]) % GRID, int(pos[1]) % GRID)
+        self.residue[k] = min(50.0, self.residue.get(k, 0.0) + amount)
 
     def get_residue(self, pos):
-        x, y = int(pos[0]) % GRID, int(pos[1]) % GRID
-        return self.residue[x][y]
+        k = (int(pos[0]) % GRID, int(pos[1]) % GRID)
+        return self.residue.get(k, 0.0)
 
     def decay_residue(self):
-        for x in range(GRID):
-            for y in range(GRID):
-                v = self.residue[x][y]
-                if v > 0.01:
-                    self.residue[x][y] = v * RESIDUE_DECAY
-                else:
-                    self.residue[x][y] = 0.0
+        # Sparse decay — only touch non-zero cells
+        for (x, y), v in list(self._residue_sparse.items()):
+            if v > 0.01:
+                self._residue_sparse[(x,y)] = v * RESIDUE_DECAY
+            else:
+                del self._residue_sparse[(x,y)]
 
     # ── Field strength at a point ─────────────────────────────────────────────
 
