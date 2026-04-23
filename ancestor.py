@@ -18,8 +18,6 @@ Communication: field emissions modulated by internal state.
 author: jon stiles / claude — april 2026
 """
 
-from gevent import monkey; monkey.patch_all()
-
 import os, math, random, json, time, logging, threading
 from collections import deque
 from flask import Flask, jsonify
