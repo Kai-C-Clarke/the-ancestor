@@ -658,9 +658,14 @@ def run_loop():
             )
             last_report = c
 
+# Start Flask in a daemon thread, run simulation in main thread
 update_cache()
-_thread = threading.Thread(target=run_loop, daemon=True)
-_thread.start()
+_flask_thread = threading.Thread(
+    target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), 
+                           threaded=True, use_reloader=False),
+    daemon=True
+)
+_flask_thread.start()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLASK ENDPOINTS
@@ -732,5 +737,4 @@ def start():
     return jsonify({"status": "running"})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    run_loop()  # simulation runs in main thread
