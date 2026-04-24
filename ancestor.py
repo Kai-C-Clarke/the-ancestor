@@ -658,14 +658,8 @@ def run_loop():
             )
             last_report = c
 
-# Start Flask in a daemon thread, run simulation in main thread
+# Flask started in __main__ after routes are defined
 update_cache()
-_flask_thread = threading.Thread(
-    target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), 
-                           threaded=True, use_reloader=False),
-    daemon=True
-)
-_flask_thread.start()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLASK ENDPOINTS
@@ -737,4 +731,14 @@ def start():
     return jsonify({"status": "running"})
 
 if __name__ == "__main__":
-    run_loop()  # simulation runs in main thread
+    port = int(os.environ.get("PORT", 5000))
+    # Start Flask in daemon thread AFTER all routes are registered
+    _flask_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False),
+        daemon=True
+    )
+    _flask_thread.start()
+    log.info(f"Flask started on port {port}")
+    time.sleep(1)  # give Flask time to bind the port
+    run_loop()     # simulation runs in main thread
+
