@@ -105,11 +105,11 @@ Communication style: direct, no fluff. ("NTIGAS")
 
 ## API KEYS AND CREDENTIALS
 
-- **DeepSeek:** sk-ca632bb8435c43558e89c8932d2b51b0
+- **DeepSeek:** [REDACTED - DeepSeek key in zshrc]
 - **Claude model (Consilium):** claude-sonnet-4-6 (updated 15 Apr 2026, deprecation notice received)
 - **Anthropic:** [REDACTED - see Render env vars]
-- **OpenAI:** sk-proj-ZyBShV9QLfUGvc_Z4jMdAnRooC6cTUgXEn9nxQKTNxOwH4j87zVo04vfmRYDRFM607fTsBEQ0WT3BlbkFJrmmQfnJJn_hTjyCnw3Mu5eNJNJ_9zpjW8fu4kUX7UHYFfNUHkpqXa-zY3To5cOx6MA
-- **ElevenLabs:** sk_d9709cdfe9dfb01101a5ef256329109f95cedba13799a5f5
+- **OpenAI:** [REDACTED - OpenAI key in zshrc]
+- **ElevenLabs:** [REDACTED - ElevenLabs key in zshrc]
 - **Grok/xAI:** (in Render env vars on consilium-d1fw)
 - **GitHub PAT (Kai-C-Clarke):** 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 (expires Jun 2026)
 - **Consilium API key:** 3a51b60e9b78720f8528412db52e7ef3
