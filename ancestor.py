@@ -38,7 +38,8 @@ TOTAL_ENERGY  = 200000.0     # conserved. never created or destroyed.
 
 # Planetary field
 N_HOTSPOTS        = 8        # energy sources
-HOTSPOT_DRIFT     = 0.15     # grid cells per cycle drift
+VENT_ERUPT_PROB   = 0.0005   # probability per cycle of random large vent jump
+HOTSPOT_DRIFT     = 0.8      # faster geological drift — food source is mobile
 HOTSPOT_OUTPUT    = 1.2      # energy released per cycle per hotspot
 HOTSPOT_RADIUS    = 8.0      # influence radius in grid cells
 
@@ -55,6 +56,7 @@ BLOOM_DEATH_PULSE = 20.0     # residue pulse on death
 GRAZER_INIT       = 800
 GRAZER_MAX        = 5000
 GRAZER_MIN        = 200
+GRAZER_SPEED_BOOST= 1.6      # grazers faster than hunters when near danger
 GRAZER_ENERGY     = 30.0
 GRAZER_COST       = 0.25     # energy cost per cycle (metabolism)
 GRAZER_FEED_GAIN  = 12.0     # energy gained per cycle of bloom contact
@@ -62,6 +64,8 @@ GRAZER_BREED_E    = 38.0
 GRAZER_BREED_COOL = 6
 GRAZER_MAX_AGE    = 60
 GRAZER_FIELD_RANGE= 4.0      # grazer emits a faint field
+GRAZER_FLOCK_RANGE= 8.0      # radius within which grazers flock
+GRAZER_FLOCK_FORCE= 0.15     # strength of pull toward swarm centre
 
 # Hunters
 HUNTER_INIT       = 40
@@ -73,6 +77,10 @@ HUNTER_FEED_GAIN  = 35.0
 HUNTER_BREED_E    = 180.0
 HUNTER_BREED_COOL = 18
 HUNTER_MAX_AGE    = 150
+CANNIBAL_MIN_E    = 150.0    # hunter must have this energy to cannibalise
+CANNIBAL_MAX_E    = 50.0     # victim must be below this energy
+CANNIBAL_GAIN     = 60.0     # energy gained from cannibalism
+CANNIBAL_RADIUS   = 1.5      # contact radius for cannibalism
 HUNTER_FIELD_RANGE= 8.0
 
 # Brownian motion
@@ -340,13 +348,19 @@ class World:
             # Slowly change drift direction
             if random.random() < 0.01:
                 hs["drift"] = [random.gauss(0, HOTSPOT_DRIFT), random.gauss(0, HOTSPOT_DRIFT)]
-            # Release energy to nearby blooms
+            # Volcanic eruption — occasional large jump to new location
+            if random.random() < VENT_ERUPT_PROB:
+                hs["pos"] = random_pos()
+                log.info(f"Vent eruption — {hs['id']} jumped to new position")
+            # Release energy to nearby blooms — properly conserved
             for bl in self.blooms.values():
                 d = dist(hs["pos"], bl["pos"])
                 if d < HOTSPOT_RADIUS:
                     gain = HOTSPOT_OUTPUT * (1 - d / HOTSPOT_RADIUS)
-                    bl["energy"] = min(BLOOM_ENERGY_MAX, bl["energy"] + gain)
-                    self.energy_pool -= gain
+                    actual_gain = min(gain, BLOOM_ENERGY_MAX - bl["energy"])
+                    if actual_gain > 0 and self.energy_pool >= actual_gain:
+                        bl["energy"] += actual_gain
+                        self.energy_pool -= actual_gain
 
     # ── Bloom step ────────────────────────────────────────────────────────────
 
@@ -400,8 +414,35 @@ class World:
             if random.random() < SOMATIC_PROB:
                 gz["genome"] = somatic_mutate(gz["genome"])
 
-            # Move — pure Brownian + chemokinesis
+            # Flocking — weak attraction toward nearby grazer centre of mass
+            flock_target = None
+            nearby = [g2["pos"] for gid2, g2 in list(self.grazers.items())
+                      if gid2 != gz["id"] and dist(gz["pos"], g2["pos"]) < GRAZER_FLOCK_RANGE]
+            if len(nearby) >= 3:
+                cx = sum(p[0] for p in nearby) / len(nearby)
+                cy = sum(p[1] for p in nearby) / len(nearby)
+                flock_target = [wrap(cx), wrap(cy)]
+                # Nudge heading toward flock centre
+                dx = wrap(cx - gz["pos"][0] + GRID/2) - GRID/2
+                dy = wrap(cy - gz["pos"][1] + GRID/2) - GRID/2
+                angle = math.atan2(dy, dx)
+                gz["heading"] = gz["heading"] * (1 - GRAZER_FLOCK_FORCE) + angle * GRAZER_FLOCK_FORCE
+
+            # Move — Brownian + chemokinesis + flocking
             self.move_entity(gz, field)
+
+            # Flee response — if hunter nearby, boost speed
+            for h in list(self.hunters.values()):
+                if dist(gz["pos"], h["pos"]) < HUNTER_FIELD_RANGE * 0.5:
+                    gz["genome"]["step_size"] = min(
+                        gz["genome"]["step_size"] * GRAZER_SPEED_BOOST,
+                        2.5
+                    )
+                    # Head away from hunter
+                    dx = wrap(gz["pos"][0] - h["pos"][0] + GRID/2) - GRID/2
+                    dy = wrap(gz["pos"][1] - h["pos"][1] + GRID/2) - GRID/2
+                    gz["heading"] = math.atan2(dy, dx) + random.gauss(0, 0.3)
+                    break
 
             # Feed — contact only
             for bl in self.blooms.values():
@@ -492,7 +533,8 @@ class World:
             # Leave emission trace
             self.add_residue(h["pos"], h["emit_state"] * 0.05)
 
-            # Feed — contact only with grazers
+            # Hunt grazers — contact only
+            hunted = False
             for gid, gz in list(self.grazers.items()):
                 if dist(h["pos"], gz["pos"]) < CONTACT_RADIUS:
                     h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + HUNTER_FEED_GAIN)
@@ -501,7 +543,22 @@ class World:
                     del self.grazers[gid]
                     self.deaths["grazer"] += 1
                     self.add_residue(h["pos"], 3.0)
+                    hunted = True
                     break
+
+            # Cannibalism — energy-rich hunters consume weakened hunters
+            if not hunted and h["energy"] > CANNIBAL_MIN_E:
+                for hid2, h2 in list(self.hunters.items()):
+                    if hid2 == h["id"] or hid2 in dead:
+                        continue
+                    if (h2["energy"] < CANNIBAL_MAX_E and
+                            dist(h["pos"], h2["pos"]) < CANNIBAL_RADIUS):
+                        h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + CANNIBAL_GAIN)
+                        h["kills"] += 1
+                        if hid2 not in dead:
+                            dead.append(hid2)
+                        self.add_residue(h["pos"], 8.0)
+                        break
 
             # Breed
             if (h["energy"] > HUNTER_BREED_E and
@@ -741,4 +798,5 @@ if __name__ == "__main__":
     log.info(f"Flask started on port {port}")
     time.sleep(1)  # give Flask time to bind the port
     run_loop()     # simulation runs in main thread
+
 
