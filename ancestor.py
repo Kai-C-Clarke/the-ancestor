@@ -81,6 +81,12 @@ CANNIBAL_MIN_E    = 150.0    # hunter must have this energy to cannibalise
 CANNIBAL_MAX_E    = 50.0     # victim must be below this energy
 CANNIBAL_GAIN     = 60.0     # energy gained from cannibalism
 CANNIBAL_RADIUS   = 1.5      # contact radius for cannibalism
+
+# Coordination bonus — pack hunting
+COORD_RANGE       = 8.0      # radius within which hunters count as coordinating
+COORD_MIN         = 2        # minimum hunters needed for bonus
+COORD_BONUS       = 1.8      # energy multiplier when coordinating (1.8x feed gain)
+COORD_SIGNAL_BOOST= 0.4      # coordinating hunters emit stronger fields (worth broadcasting)
 HUNTER_FIELD_RANGE= 8.0
 
 # Brownian motion
@@ -534,12 +540,26 @@ class World:
             self.add_residue(h["pos"], h["emit_state"] * 0.05)
 
             # Hunt grazers — contact only
+            # Count nearby coordinating hunters first
+            coord_hunters = [
+                h2 for h2id, h2 in self.hunters.items()
+                if h2id != h["id"] and dist(h["pos"], h2["pos"]) < COORD_RANGE
+            ]
+            coordinating = len(coord_hunters) >= COORD_MIN - 1
+            feed_gain = HUNTER_FEED_GAIN * (COORD_BONUS if coordinating else 1.0)
+
+            # Boost emission when coordinating — makes broadcasting worth it
+            if coordinating:
+                h["emit_state"] = min(h["emit_state"] * (1 + COORD_SIGNAL_BOOST),
+                                      h["genome"]["emit_amplitude"] * 2.0)
+
             hunted = False
             for gid, gz in list(self.grazers.items()):
                 if dist(h["pos"], gz["pos"]) < CONTACT_RADIUS:
-                    h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + HUNTER_FEED_GAIN)
+                    h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + feed_gain)
                     h["contacts"] += 1
                     h["kills"]     += 1
+                    h["coordinated_kills"] = h.get("coordinated_kills", 0) + (1 if coordinating else 0)
                     del self.grazers[gid]
                     self.deaths["grazer"] += 1
                     self.add_residue(h["pos"], 3.0)
@@ -689,6 +709,17 @@ class World:
         # Cannibalism count
         cannibal_kills = sum(h["kills"] for h in hunters if h["energy"] > CANNIBAL_MIN_E * 0.8)
 
+        # Coordination stats
+        coord_kills    = sum(h.get("coordinated_kills", 0) for h in hunters)
+        pct_coordinating = 0.0
+        if hunters:
+            coordinating_now = sum(
+                1 for h in hunters
+                if sum(1 for h2 in hunters if h2["id"] != h["id"]
+                       and dist(h["pos"], h2["pos"]) < COORD_RANGE) >= COORD_MIN - 1
+            )
+            pct_coordinating = round(coordinating_now / len(hunters) * 100, 1)
+
         return {
             "cycle":               self.cycle,
             "generation":          self.max_hunter_gen,
@@ -708,6 +739,8 @@ class World:
             "avg_hunter_energy":     round(avg_energy, 2),
             "avg_dist_to_grazer":    avg_dist_to_grazer,
             "cannibal_kills":        cannibal_kills,
+            "coord_kills":           coord_kills,
+            "pct_coordinating":      pct_coordinating,
         }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -743,7 +776,8 @@ def run_loop():
                 f"signals:{s['total_signals']:>9} "
                 f"bm:{s['bm_recent']:>+.4f} trend:{s['bm_trend']:>+.6f} "
                 f"sens:{s['avg_field_sensitivity']:.3f} "
-                f"dist:{s['avg_dist_to_grazer']:.1f}"
+                f"dist:{s['avg_dist_to_grazer']:.1f} "
+                f"coord:{s['pct_coordinating']:.0f}%"
             )
             last_report = c
 
@@ -774,6 +808,8 @@ def health():
         "avg_hunter_energy":     s.get("avg_hunter_energy", 0),
         "avg_dist_to_grazer":    s.get("avg_dist_to_grazer", 0),
         "cannibal_kills":        s.get("cannibal_kills", 0),
+        "coord_kills":           s.get("coord_kills", 0),
+        "pct_coordinating":      s.get("pct_coordinating", 0),
     })
 
 @app.route("/field/summary")
