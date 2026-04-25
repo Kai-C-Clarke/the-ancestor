@@ -34,8 +34,8 @@ CORS(app)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 GRID          = 60           # world is GRID x GRID toroidal 2D plane
-TOTAL_ENERGY  = 500000.0     # starting energy budget — scaled to pyramid
-ENERGY_TRICKLE = 120.0       # energy added per cycle — scaled to pyramid size
+TOTAL_ENERGY  = 150000.0     # starting energy budget — scaled to pyramid
+ENERGY_TRICKLE = 40.0        # energy added per cycle — scaled to pyramid size
                               # represents background geothermal/solar input
                               # prevents total extinction while maintaining scarcity
 
@@ -43,7 +43,7 @@ ENERGY_TRICKLE = 120.0       # energy added per cycle — scaled to pyramid size
 N_HOTSPOTS        = 8        # energy sources
 VENT_ERUPT_PROB   = 0.0005   # probability per cycle of random large vent jump
 HOTSPOT_DRIFT     = 0.8      # faster geological drift — food source is mobile
-HOTSPOT_OUTPUT    = 45.0     # energy released per cycle per hotspot — feeds pyramid
+HOTSPOT_OUTPUT    = 12.0     # energy released per cycle per hotspot — feeds pyramid
 HOTSPOT_RADIUS    = 8.0      # influence radius in grid cells
 
 # Blooms
@@ -63,8 +63,8 @@ GRAZER_SPEED_BOOST= 1.6      # grazers faster than hunters when near danger
 GRAZER_ENERGY     = 30.0
 GRAZER_COST       = 0.25     # energy cost per cycle (metabolism)
 GRAZER_FEED_GAIN  = 12.0     # energy gained per cycle of bloom contact
-GRAZER_BREED_E    = 38.0
-GRAZER_BREED_COOL = 6
+GRAZER_BREED_E    = 25.0
+GRAZER_BREED_COOL = 3
 GRAZER_MAX_AGE    = 60
 GRAZER_FIELD_RANGE= 4.0      # grazer emits a faint field
 GRAZER_FLOCK_RANGE= 8.0      # radius within which grazers flock
