@@ -257,6 +257,7 @@ class World:
         # Stats
         self.total_signals = 0
         self.bm_log        = deque(maxlen=BM_WINDOW)
+        self._social_bm    = 0.0
         self.births        = {"grazer": 0, "hunter": 0, "bloom": 0}
         self.deaths        = {"grazer": 0, "hunter": 0, "bloom": 0}
         self.max_hunter_gen = 0
@@ -382,7 +383,7 @@ class World:
             if bl["energy"] <= 0:
                 dead.append(bid)
                 self.add_residue(bl["pos"], BLOOM_DEATH_PULSE)
-                self.energy_pool += bl["energy"] * 0.2
+                self.energy_pool += max(0, bl["energy"])  # full energy returned
                 self.deaths["bloom"] += 1
 
         for bid in dead:
@@ -477,7 +478,7 @@ class World:
             # Die
             if gz["energy"] <= 0 or gz["age"] > GRAZER_MAX_AGE:
                 dead.append(gz["id"])
-                self.energy_pool += max(0, gz["energy"]) * 0.3
+                self.energy_pool += max(0, gz["energy"])  # full energy returned to pool
                 self.add_residue(gz["pos"], 1.5)
                 self.deaths["grazer"] += 1
 
@@ -556,10 +557,25 @@ class World:
             hunted = False
             for gid, gz in list(self.grazers.items()):
                 if dist(h["pos"], gz["pos"]) < CONTACT_RADIUS:
-                    h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + feed_gain)
+                    grazer_energy = gz["energy"]
+                    # Base gain comes from the grazer
+                    base_gain   = min(HUNTER_FEED_GAIN, grazer_energy)
+                    # Coordination bonus drawn from energy pool (finite resource)
+                    bonus_gain  = 0.0
+                    if coordinating:
+                        bonus_available = min(
+                            HUNTER_FEED_GAIN * (COORD_BONUS - 1.0),
+                            self.energy_pool * 0.001  # cap at 0.1% of pool per kill
+                        )
+                        bonus_gain = max(0.0, bonus_available)
+                        self.energy_pool -= bonus_gain
+                    total_gain = base_gain + bonus_gain
+                    h["energy"] = min(HUNTER_ENERGY * 2.5, h["energy"] + total_gain)
                     h["contacts"] += 1
                     h["kills"]     += 1
                     h["coordinated_kills"] = h.get("coordinated_kills", 0) + (1 if coordinating else 0)
+                    # Return unused grazer energy to pool
+                    self.energy_pool += max(0, grazer_energy - base_gain)
                     del self.grazers[gid]
                     self.deaths["grazer"] += 1
                     self.add_residue(h["pos"], 3.0)
@@ -600,7 +616,7 @@ class World:
             # Die
             if h["energy"] <= 0 or h["age"] > HUNTER_MAX_AGE:
                 dead.append(h["id"])
-                self.energy_pool += max(0, h["energy"]) * 0.4
+                self.energy_pool += max(0, h["energy"])  # full energy returned to pool
                 self.add_residue(h["pos"], 5.0)
                 self.deaths["hunter"] += 1
 
@@ -615,46 +631,73 @@ class World:
 
     def measure_bm(self):
         """
-        For each hunter: did it move closer to any grazer this cycle?
-        Compare hunters that received a strong field signal vs those that didn't.
-        Delta = improvement in proximity to nearest grazer.
-        Positive = the field environment (including other hunters' signals)
-                   correlated with useful movement.
+        Cooperative chain measurement.
+        Phase A: Hunter receives signal
+        Phase B: Hunter converges on partner
+        Phase C: Hunter near grazer while converging
+
+        Primary metric: chain_bm (signal -> partner convergence -> food proximity)
+        Also tracks social_bm (signal -> partner proximity)
         """
         if not self.grazers or not self.hunters:
             return 0.0
 
-        grazer_positions = [gz["pos"] for gz in self.grazers.values()]
+        hunters    = list(self.hunters.values())
+        grazer_pos = [gz["pos"] for gz in self.grazers.values()]
 
-        def nearest_grazer_dist(pos):
-            return min(dist(pos, gp) for gp in grazer_positions)
+        def ng(pos):
+            return min(dist(pos, gp) for gp in grazer_pos) if grazer_pos else 99.0
 
-        with_signal  = []
-        without_signal = []
+        def np_dist(h, use_before=False):
+            pos = h["pos_before"] if use_before else h["pos"]
+            if not pos: return 99.0
+            others = [h2["pos_before"] if use_before else h2["pos"]
+                      for h2 in hunters if h2["id"] != h["id"]]
+            others = [p for p in others if p]
+            return min(dist(pos, p) for p in others) if others else 99.0
 
-        for h in self.hunters.values():
+        chain_deltas   = []
+        classic_sig    = []
+        classic_nosig  = []
+        social_sig     = []
+        social_nosig   = []
+
+        for h in hunters:
             if h["pos_before"] is None:
                 continue
-            d_before = nearest_grazer_dist(h["pos_before"])
-            d_after  = nearest_grazer_dist(h["pos"])
-            delta    = d_before - d_after  # positive = moved closer
+            has_signal = h["field_rx"] > 0.3
 
-            if h["field_rx"] > 0.3:
-                with_signal.append(delta)
-            else:
-                without_signal.append(delta)
+            # Classic: signal -> grazer proximity
+            dg_before = ng(h["pos_before"])
+            dg_after  = ng(h["pos"])
+            classic = dg_before - dg_after
+            (classic_sig if has_signal else classic_nosig).append(classic)
 
-        if not with_signal or not without_signal:
-            return 0.0
+            # Social: signal -> partner proximity
+            dp_before = np_dist(h, use_before=True)
+            dp_after  = np_dist(h, use_before=False)
+            social = dp_before - dp_after
+            (social_sig if has_signal else social_nosig).append(social)
 
-        mean_with    = sum(with_signal)    / len(with_signal)
-        mean_without = sum(without_signal) / len(without_signal)
+            # Chain: received signal, moved toward partner, ended near grazer
+            if has_signal and social > 0 and dg_after < COORD_RANGE:
+                chain_deltas.append(classic)
 
-        # Positive = hunters receiving signals moved closer to food
-        # than hunters not receiving signals
-        return round(mean_with - mean_without, 6)
+        # Store social bm
+        self._social_bm = round(
+            (sum(social_sig)/len(social_sig) - sum(social_nosig)/len(social_nosig))
+            if social_sig and social_nosig else 0.0, 6
+        )
 
-    # ── Main step ─────────────────────────────────────────────────────────────
+        # Primary: chain bm
+        if chain_deltas:
+            return round(sum(chain_deltas) / len(chain_deltas), 6)
+
+        # Fallback: classic
+        if classic_sig and classic_nosig:
+            return round(sum(classic_sig)/len(classic_sig) -
+                         sum(classic_nosig)/len(classic_nosig), 6)
+        return 0.0
 
     def step(self):
         self.cycle += 1
@@ -734,6 +777,7 @@ class World:
             "births":              dict(self.births),
             "deaths":              dict(self.deaths),
             "bm_log":              list(self.bm_log)[-20:],
+            "social_bm":           getattr(self, "_social_bm", 0.0),
             # Gemini metrics
             "avg_field_sensitivity": round(avg_sensitivity, 4),
             "avg_hunter_energy":     round(avg_energy, 2),
