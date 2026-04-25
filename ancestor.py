@@ -34,8 +34,8 @@ CORS(app)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 GRID          = 60           # world is GRID x GRID toroidal 2D plane
-TOTAL_ENERGY  = 200000.0     # starting energy budget
-ENERGY_TRICKLE = 8.0         # energy added per cycle — the planet breathes
+TOTAL_ENERGY  = 500000.0     # starting energy budget — scaled to pyramid
+ENERGY_TRICKLE = 120.0       # energy added per cycle — scaled to pyramid size
                               # represents background geothermal/solar input
                               # prevents total extinction while maintaining scarcity
 
@@ -43,22 +43,22 @@ ENERGY_TRICKLE = 8.0         # energy added per cycle — the planet breathes
 N_HOTSPOTS        = 8        # energy sources
 VENT_ERUPT_PROB   = 0.0005   # probability per cycle of random large vent jump
 HOTSPOT_DRIFT     = 0.8      # faster geological drift — food source is mobile
-HOTSPOT_OUTPUT    = 1.2      # energy released per cycle per hotspot
+HOTSPOT_OUTPUT    = 45.0     # energy released per cycle per hotspot — feeds pyramid
 HOTSPOT_RADIUS    = 8.0      # influence radius in grid cells
 
 # Blooms
-BLOOM_INIT        = 20
-BLOOM_MAX         = 40
-BLOOM_MIN         = 10
+BLOOM_INIT        = 30
+BLOOM_MAX         = 60
+BLOOM_MIN         = 20
 BLOOM_ENERGY_MAX  = 80.0
 BLOOM_FIELD_RANGE = 6.0      # field emission radius
 BLOOM_RESIDUE     = 0.4      # residue deposited per cycle
 BLOOM_DEATH_PULSE = 20.0     # residue pulse on death
 
 # Grazers
-GRAZER_INIT       = 800
-GRAZER_MAX        = 5000
-GRAZER_MIN        = 200
+GRAZER_INIT       = 1500
+GRAZER_MAX        = 4000
+GRAZER_MIN        = 800
 GRAZER_SPEED_BOOST= 1.6      # grazers faster than hunters when near danger
 GRAZER_ENERGY     = 30.0
 GRAZER_COST       = 0.25     # energy cost per cycle (metabolism)
@@ -71,9 +71,9 @@ GRAZER_FLOCK_RANGE= 8.0      # radius within which grazers flock
 GRAZER_FLOCK_FORCE= 0.15     # strength of pull toward swarm centre
 
 # Hunters
-HUNTER_INIT       = 40
-HUNTER_MAX        = 300
-HUNTER_MIN        = 10
+HUNTER_INIT       = 20
+HUNTER_MAX        = 60
+HUNTER_MIN        = 4
 HUNTER_ENERGY     = 100.0
 HUNTER_COST       = 0.6
 HUNTER_FEED_GAIN  = 35.0
