@@ -664,20 +664,50 @@ class World:
             num = sum((i - xm) * vals[i] for i in range(n))
             den = sum((i - xm)**2 for i in range(n))
             trend = round(num/den, 8) if den else 0.0
+
+        # ── Gemini metrics ────────────────────────────────────────────────────
+        hunters = list(self.hunters.values())
+        grazers = list(self.grazers.values())
+
+        # Average field_sensitivity of surviving hunters
+        avg_sensitivity = 0.0
+        avg_energy      = 0.0
+        if hunters:
+            avg_sensitivity = sum(h["genome"]["field_sensitivity"] for h in hunters) / len(hunters)
+            avg_energy      = sum(h["energy"] for h in hunters) / len(hunters)
+
+        # Average distance from hunter to nearest grazer
+        avg_dist_to_grazer = 0.0
+        if hunters and grazers:
+            total_min_dist = 0.0
+            for h in hunters[:50]:  # sample for performance
+                if grazers:
+                    min_d = min(dist(h["pos"], gz["pos"]) for gz in grazers)
+                    total_min_dist += min_d
+            avg_dist_to_grazer = round(total_min_dist / min(50, len(hunters)), 3)
+
+        # Cannibalism count
+        cannibal_kills = sum(h["kills"] for h in hunters if h["energy"] > CANNIBAL_MIN_E * 0.8)
+
         return {
-            "cycle":          self.cycle,
-            "generation":     self.max_hunter_gen,
-            "hotspots":       len(self.hotspots),
-            "blooms":         len(self.blooms),
-            "grazers":        len(self.grazers),
-            "hunters":        len(self.hunters),
-            "total_signals":  self.total_signals,
-            "bm_recent":      round(bm_recent, 6),
-            "bm_trend":       trend,
-            "energy_pool":    round(self.energy_pool, 1),
-            "births":         dict(self.births),
-            "deaths":         dict(self.deaths),
-            "bm_log":         list(self.bm_log)[-20:],
+            "cycle":               self.cycle,
+            "generation":          self.max_hunter_gen,
+            "hotspots":            len(self.hotspots),
+            "blooms":              len(self.blooms),
+            "grazers":             len(self.grazers),
+            "hunters":             len(self.hunters),
+            "total_signals":       self.total_signals,
+            "bm_recent":           round(bm_recent, 6),
+            "bm_trend":            trend,
+            "energy_pool":         round(self.energy_pool, 1),
+            "births":              dict(self.births),
+            "deaths":              dict(self.deaths),
+            "bm_log":              list(self.bm_log)[-20:],
+            # Gemini metrics
+            "avg_field_sensitivity": round(avg_sensitivity, 4),
+            "avg_hunter_energy":     round(avg_energy, 2),
+            "avg_dist_to_grazer":    avg_dist_to_grazer,
+            "cannibal_kills":        cannibal_kills,
         }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -711,7 +741,9 @@ def run_loop():
                 f"H:{s['hunters']:>4} G:{s['grazers']:>5} "
                 f"BL:{s['blooms']:>3} "
                 f"signals:{s['total_signals']:>9} "
-                f"bm:{s['bm_recent']:>+.4f} trend:{s['bm_trend']:>+.6f}"
+                f"bm:{s['bm_recent']:>+.4f} trend:{s['bm_trend']:>+.6f} "
+                f"sens:{s['avg_field_sensitivity']:.3f} "
+                f"dist:{s['avg_dist_to_grazer']:.1f}"
             )
             last_report = c
 
@@ -735,9 +767,13 @@ def health():
         "blooms":        s.get("blooms", 0),
         "hotspots":      s.get("hotspots", 0),
         "total_signals": s.get("total_signals", 0),
-        "bm_recent":     s.get("bm_recent", 0),
-        "bm_trend":      s.get("bm_trend", 0),
-        "energy_pool":   s.get("energy_pool", 0),
+        "bm_recent":             s.get("bm_recent", 0),
+        "bm_trend":              s.get("bm_trend", 0),
+        "energy_pool":           s.get("energy_pool", 0),
+        "avg_field_sensitivity": s.get("avg_field_sensitivity", 0),
+        "avg_hunter_energy":     s.get("avg_hunter_energy", 0),
+        "avg_dist_to_grazer":    s.get("avg_dist_to_grazer", 0),
+        "cannibal_kills":        s.get("cannibal_kills", 0),
     })
 
 @app.route("/field/summary")
