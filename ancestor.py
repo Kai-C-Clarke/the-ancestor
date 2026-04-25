@@ -34,7 +34,10 @@ CORS(app)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 GRID          = 60           # world is GRID x GRID toroidal 2D plane
-TOTAL_ENERGY  = 200000.0     # conserved. never created or destroyed.
+TOTAL_ENERGY  = 200000.0     # starting energy budget
+ENERGY_TRICKLE = 8.0         # energy added per cycle — the planet breathes
+                              # represents background geothermal/solar input
+                              # prevents total extinction while maintaining scarcity
 
 # Planetary field
 N_HOTSPOTS        = 8        # energy sources
@@ -348,6 +351,8 @@ class World:
     # ── Planetary hotspot step ────────────────────────────────────────────────
 
     def step_hotspots(self):
+        # Background planetary energy trickle — the sun keeps shining
+        self.energy_pool += ENERGY_TRICKLE
         for hs in self.hotspots.values():
             # Drift
             hs["pos"][0] = wrap(hs["pos"][0] + hs["drift"][0] + random.gauss(0, 0.02))
