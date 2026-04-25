@@ -23,6 +23,10 @@ from collections import deque
 from flask import Flask, jsonify
 from flask_cors import CORS
 
+# ── Persistence ───────────────────────────────────────────────────────────────
+SAVE_PATH     = os.environ.get("SAVE_PATH", "/mnt/data/field_state.json")
+SAVE_INTERVAL = 1000   # cycles between autosaves
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -704,6 +708,84 @@ class World:
                          sum(classic_nosig)/len(classic_nosig), 6)
         return 0.0
 
+
+    # ── Save / Load ───────────────────────────────────────────────────────────
+
+    def save(self, path=None):
+        """Serialise world state to JSON on persistent disk."""
+        path = path or SAVE_PATH
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            state = {
+                "cycle":         self.cycle,
+                "generation":    self.max_hunter_gen,
+                "energy_pool":   self.energy_pool,
+                "total_signals": self.total_signals,
+                "births":        dict(self.births),
+                "deaths":        dict(self.deaths),
+                "bm_log":        list(self.bm_log),
+                "_social_bm":    getattr(self, "_social_bm", 0.0),
+                "hotspots": {k: {"id":v["id"],"pos":v["pos"],"drift":v["drift"],"energy":v["energy"]}
+                             for k,v in self.hotspots.items()},
+                "blooms":   {k: {"id":v["id"],"pos":v["pos"],"energy":v["energy"],"age":v["age"]}
+                             for k,v in self.blooms.items()},
+                "grazers":  {k: {"id":v["id"],"pos":v["pos"],"energy":v["energy"],"age":v["age"],
+                                 "breed_cool":v["breed_cool"],"generation":v["generation"],
+                                 "heading":v["heading"],"contacts":v["contacts"],"genome":v["genome"]}
+                             for k,v in self.grazers.items()},
+                "hunters":  {k: {"id":v["id"],"pos":v["pos"],"energy":v["energy"],"age":v["age"],
+                                 "breed_cool":v["breed_cool"],"generation":v["generation"],
+                                 "heading":v["heading"],"emit_state":v["emit_state"],
+                                 "field_rx":v["field_rx"],"contacts":v["contacts"],
+                                 "kills":v["kills"],
+                                 "coordinated_kills":v.get("coordinated_kills",0),
+                                 "genome":v["genome"]}
+                             for k,v in self.hunters.items()},
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, path)
+            log.info(f"Saved at cycle {self.cycle} -> {path}")
+            return True
+        except Exception as e:
+            log.warning(f"Save failed: {e}")
+            return False
+
+    def load(self, path=None):
+        """Restore world state from JSON."""
+        path = path or SAVE_PATH
+        if not os.path.exists(path):
+            log.info(f"No save file at {path} — starting fresh")
+            return False
+        try:
+            with open(path) as f:
+                state = json.load(f)
+            self.cycle          = state["cycle"]
+            self.max_hunter_gen = state["generation"]
+            self.energy_pool    = state["energy_pool"]
+            self.total_signals  = state["total_signals"]
+            self.births         = state["births"]
+            self.deaths         = state["deaths"]
+            self.bm_log         = deque(state["bm_log"], maxlen=BM_WINDOW)
+            self._social_bm     = state.get("_social_bm", 0.0)
+            self.hotspots = {k: v for k,v in state["hotspots"].items()}
+            self.blooms   = {k: v for k,v in state["blooms"].items()}
+            self.grazers  = {}
+            for k,v in state["grazers"].items():
+                v["pos_before"] = None
+                self.grazers[k] = v
+            self.hunters = {}
+            for k,v in state["hunters"].items():
+                v["pos_before"] = None
+                self.hunters[k] = v
+            log.info(f"Loaded: cycle {self.cycle}, gen {self.max_hunter_gen}, "
+                     f"H:{len(self.hunters)} G:{len(self.grazers)}")
+            return True
+        except Exception as e:
+            log.warning(f"Load failed: {e} — starting fresh")
+            return False
+
     def step(self):
         self.cycle += 1
         self.step_hotspots()
@@ -816,6 +898,8 @@ def run_loop():
         if c % 10 == 0:
             update_cache()
             time.sleep(0)
+        if c % SAVE_INTERVAL == 0 and c > 0:
+            world.save()
         if c - last_report >= 1000:
             s = _cache
             log.info(
@@ -831,6 +915,8 @@ def run_loop():
             last_report = c
 
 # Flask started in __main__ after routes are defined
+# Try to load saved state from persistent disk
+world.load()
 update_cache()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -893,6 +979,11 @@ def hunters():
             "genome":     {k: round(v, 3) for k, v in h["genome"].items()},
         })
     return jsonify({"hunters": hs, "cycle": world.cycle})
+
+@app.route("/field/save")
+def field_save():
+    ok = world.save()
+    return jsonify({"ok": ok, "cycle": world.cycle, "path": SAVE_PATH})
 
 @app.route("/field/stop")
 def stop():
