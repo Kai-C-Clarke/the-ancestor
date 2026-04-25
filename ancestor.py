@@ -35,7 +35,7 @@ CORS(app)
 
 GRID          = 60           # world is GRID x GRID toroidal 2D plane
 TOTAL_ENERGY  = 150000.0     # starting energy budget — scaled to pyramid
-ENERGY_TRICKLE = 40.0        # energy added per cycle — scaled to pyramid size
+ENERGY_TRICKLE = 500.0        # energy added per cycle — scaled to pyramid size
                               # represents background geothermal/solar input
                               # prevents total extinction while maintaining scarcity
 
