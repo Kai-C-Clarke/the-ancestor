@@ -351,8 +351,9 @@ class SignalExperiment:
 
         # Phase 1: single float exchange
         if self.phase == 1:
-            last_b_val = list(self.history_b)[-1] if self.history_b else 0.5
-            last_a_val = list(self.history_a)[-1] if self.history_a else 0.5
+            import random
+            last_b_val = list(self.history_b)[-1] if self.history_b else random.uniform(0.1, 0.9)
+            last_a_val = list(self.history_a)[-1] if self.history_a else random.uniform(0.1, 0.9)
 
             prompt_a = self.build_prompt("A", last_b_val)
             raw_a    = call_sync("A", DEEPSEEK_URL, DEEPSEEK_API_KEY, DEEPSEEK_MODEL, prompt_a)
