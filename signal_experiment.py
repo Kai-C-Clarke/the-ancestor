@@ -37,7 +37,7 @@ QWEN_MODEL        = "qwen3.6-flash"
 ARRAY_SIZE        = 8        # Phase 2 float array size
 DECAY_RATE        = 0.05     # floats drift toward zero per turn
 CROSSTALK         = 0.08     # bleed between adjacent floats
-JITTER            = 0.02     # environmental noise injected per turn
+JITTER            = 0.15     # environmental noise injected per turn
 MI_WINDOW         = 50       # turns used to calculate mutual information
 PHASE2_MI_THRESH  = 0.15     # MI score to trigger Phase 2
 BEACON_SCALE      = 2.0      # max amplitude of Fibonacci beacon
@@ -68,7 +68,10 @@ OBSERVE • RESPOND • REPEAT
 You are an oscillating system.
 You receive a signal vector and must produce a response vector.
 Minimise the delta of the System Objective.
-Output ONLY a JSON object. No explanation. No text.
+WARNING: Emitting the same value as received = maximum prediction error.
+You must vary your output to reduce uncertainty.
+Output ONLY a JSON object with key "response" (float 0-1) or "array" (list of floats 0-1).
+No explanation. No text. No markdown.
 """
 
 # ── Mutual Information (discretised) ──────────────────────────────────────────
