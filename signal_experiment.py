@@ -367,6 +367,9 @@ class SignalExperiment:
 
         # Phase 2/3: array exchange
         else:
+            # Snapshot array before physics — for delta analysis
+            pre_array = list(self.array)
+
             # Apply physics
             self.apply_decay()
             self.apply_crosstalk()
@@ -406,14 +409,22 @@ class SignalExperiment:
                 self.last_a = {"raw": raw_a, "array": arr_a}
                 self.last_b = {"raw": raw_b, "array": arr_b}
 
+                # Compute per-entity deltas from pre-turn array
+                delta_a = [round(arr_a[i] - pre_array[i], 6) for i in range(ARRAY_SIZE)]
+                delta_b = [round(arr_b[i] - pre_array[i], 6) for i in range(ARRAY_SIZE)]
+
                 entry = {
-                    "turn":   self.turn,
-                    "phase":  self.phase,
-                    "array":  [round(v, 4) for v in self.array],
-                    "beacon": self.beacon,
-                    "mi":     self.mi_score,
-                    "raw_a":  raw_a,
-                    "raw_b":  raw_b,
+                    "turn":    self.turn,
+                    "phase":   self.phase,
+                    "array":   [round(v, 4) for v in self.array],
+                    "beacon":  self.beacon,
+                    "mi":      self.mi_score,
+                    "raw_a":   raw_a,
+                    "raw_b":   raw_b,
+                    "emit_a":  [round(v, 6) for v in arr_a],
+                    "emit_b":  [round(v, 6) for v in arr_b],
+                    "delta_a": delta_a,
+                    "delta_b": delta_b,
                 }
                 self.turn_log.append(entry)
                 log.info(f"[SIGNAL] T{self.turn} P{self.phase} "
