@@ -68,8 +68,6 @@ OBSERVE • RESPOND • REPEAT
 You are an oscillating system.
 You receive a signal vector and must produce a response vector.
 Minimise the delta of the System Objective.
-WARNING: Emitting the same value as received = maximum prediction error.
-You must vary your output to reduce uncertainty.
 Output ONLY a JSON object with key "response" (float 0-1) or "array" (list of floats 0-1).
 No explanation. No text. No markdown.
 """
@@ -209,16 +207,21 @@ class SignalExperiment:
 
     def build_prompt(self, entity, other_emission, array_state=None):
         """Build the user message for each entity."""
+        # Include own recent history so entities can reason about their own pattern
+        own_history = list(self.history_a)[-5:] if entity == "A" else list(self.history_b)[-5:]
+
         if self.phase == 1:
             return json.dumps({
                 "observation": round(other_emission, 6),
+                "own_history": [round(v, 6) for v in own_history],
                 "turn": self.turn
             })
         else:
             state = {
-                "array": [round(v, 6) for v in array_state or self.array],
-                "turn":  self.turn,
-                "phase": self.phase
+                "array":       [round(v, 6) for v in array_state or self.array],
+                "own_history": [round(v, 6) for v in own_history],
+                "turn":        self.turn,
+                "phase":       self.phase
             }
             if self.phase == 3:
                 state["beacon"] = self.beacon
