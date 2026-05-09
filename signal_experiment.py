@@ -285,7 +285,7 @@ class SignalExperiment:
             "model":       model,
             "messages":    messages,
             "max_tokens":  80,
-            "temperature": 0.7,
+            "temperature": 1.5,
         }
         # Disable chain-of-thought for Qwen
         if "qwen" in model.lower():
@@ -320,7 +320,7 @@ class SignalExperiment:
                 "model":       model,
                 "messages":    messages,
                 "max_tokens":  80,
-                "temperature": 0.7,
+                "temperature": 1.5,
             }
             if "qwen" in model.lower():
                 payload["enable_thinking"] = False
