@@ -206,16 +206,15 @@ class SignalExperiment:
 
     def build_prompt(self, entity, other_emission, array_state=None):
         """Build the user message for each entity."""
-        # Include own recent history so entities can reason about their own pattern
-        own_history = list(self.history_a)[-20:] if entity == "A" else list(self.history_b)[-20:]
-
         if self.phase == 1:
+            # Phase 1: clean observation only — no history anchor
             return json.dumps({
                 "observation": round(other_emission, 6),
-                "own_history": [round(v, 6) for v in own_history],
                 "turn": self.turn
             })
         else:
+            # Phase 2/3: include own history for pattern reasoning
+            own_history = list(self.history_a)[-20:] if entity == "A" else list(self.history_b)[-20:]
             state = {
                 "array":       [round(v, 6) for v in array_state or self.array],
                 "own_history": [round(v, 6) for v in own_history],
