@@ -919,6 +919,14 @@ def run_loop():
 world.load()
 update_cache()
 
+# ── Signal experiment routes (registered before Flask starts) ──────────────────
+try:
+    from signal_experiment import start_experiment
+    start_experiment(app)
+    log.info("Signal experiment routes registered — /llm/* active")
+except Exception as e:
+    log.warning(f"Signal experiment route registration failed: {e}")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLASK ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1009,14 +1017,6 @@ if __name__ == "__main__":
     _flask_thread.start()
     log.info(f"Flask started on port {port}")
     time.sleep(1)  # give Flask time to bind the port
-
-    # Start signal experiment (LLM entity communication experiment)
-    try:
-        from signal_experiment import start_experiment
-        start_experiment(app)
-        log.info("Signal experiment started — /llm/* routes active")
-    except Exception as e:
-        log.warning(f"Signal experiment failed to start: {e}")
 
     run_loop()     # field simulation runs in main thread
 
