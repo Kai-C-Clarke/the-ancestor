@@ -44,14 +44,14 @@ BEACON_SCALE      = 2.0      # max amplitude of Fibonacci beacon
 
 # ── Fibonacci sequence as decimals (normalised 0-1) ───────────────────────────
 
-def fibonacci_sequence(n=100):
-    seq = [1, 1]
-    while len(seq) < n:
-        seq.append(seq[-1] + seq[-2])
-    max_val = max(seq)
-    return [v / max_val for v in seq]
+def fibonacci_sequence(n=200):
+    """Golden ratio quasiperiodic sequence — non-repeating, non-trivial, 0-1 range.
+    Uses fractional part of i*phi. Visible and distinctive from turn 1.
+    """
+    phi = (1 + math.sqrt(5)) / 2
+    return [(i * phi) % 1.0 for i in range(n)]
 
-FIBONACCI = fibonacci_sequence(200)
+FIBONACCI = fibonacci_sequence(500)
 
 # ── System Prompt ──────────────────────────────────────────────────────────────
 
