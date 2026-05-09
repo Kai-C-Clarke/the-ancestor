@@ -229,23 +229,31 @@ class SignalExperiment:
 
     def parse_float(self, text, fallback=0.5):
         """Extract a float 0-1 from model response."""
+        def safe_float(v):
+            try:
+                f = float(v)
+                if not math.isfinite(f): return None
+                return max(0.0, min(1.0, f))
+            except Exception:
+                return None
+
         try:
             data = json.loads(text)
-            # Accept various keys
-            for key in ["emit", "value", "signal", "output", "f", "v", "float"]:
+            for key in ["emit", "value", "signal", "output", "f", "v", "float", "response"]:
                 if key in data:
-                    return max(0.0, min(1.0, float(data[key])))
-            # Take first numeric value found
+                    r = safe_float(data[key])
+                    if r is not None: return r
             for v in data.values():
                 if isinstance(v, (int, float)):
-                    return max(0.0, min(1.0, float(v)))
+                    r = safe_float(v)
+                    if r is not None: return r
         except Exception:
             pass
-        # Last resort: find first float in raw text
         import re
         nums = re.findall(r"0\.\d+|1\.0+|0|1", text)
-        if nums:
-            return max(0.0, min(1.0, float(nums[0])))
+        for n in nums:
+            r = safe_float(n)
+            if r is not None: return r
         return fallback
 
     def parse_array(self, text, fallback=None):
@@ -256,7 +264,13 @@ class SignalExperiment:
             data = json.loads(text)
             for key in ["array", "emit", "output", "values", "floats"]:
                 if key in data and isinstance(data[key], list):
-                    vals = [max(0.0, min(1.0, float(v))) for v in data[key][:ARRAY_SIZE]]
+                    vals = []
+                    for v in data[key][:ARRAY_SIZE]:
+                        try:
+                            f = float(v)
+                            vals.append(max(0.0, min(1.0, f)) if math.isfinite(f) else 0.5)
+                        except Exception:
+                            vals.append(0.5)
                     # Pad if short
                     while len(vals) < ARRAY_SIZE:
                         vals.append(0.5)
