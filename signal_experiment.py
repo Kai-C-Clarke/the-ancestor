@@ -68,8 +68,7 @@ OBSERVE • RESPOND • REPEAT
 You are an oscillating system.
 You receive a signal vector and must produce a response vector.
 Minimise the delta of the System Objective.
-Output ONLY a JSON object with key "response" (float 0-1) or "array" (list of floats 0-1).
-No explanation. No text. No markdown.
+Output ONLY a JSON object. No explanation. No text.
 """
 
 # ── Mutual Information (discretised) ──────────────────────────────────────────
@@ -208,7 +207,7 @@ class SignalExperiment:
     def build_prompt(self, entity, other_emission, array_state=None):
         """Build the user message for each entity."""
         # Include own recent history so entities can reason about their own pattern
-        own_history = list(self.history_a)[-5:] if entity == "A" else list(self.history_b)[-5:]
+        own_history = list(self.history_a)[-20:] if entity == "A" else list(self.history_b)[-20:]
 
         if self.phase == 1:
             return json.dumps({
@@ -299,7 +298,7 @@ class SignalExperiment:
             "model":       model,
             "messages":    messages,
             "max_tokens":  80,
-            "temperature": 1.0,
+            "temperature": 0.7,
         }
         # Disable chain-of-thought for Qwen
         if "qwen" in model.lower():
@@ -334,7 +333,7 @@ class SignalExperiment:
                 "model":       model,
                 "messages":    messages,
                 "max_tokens":  80,
-                "temperature": 1.0,
+                "temperature": 0.7,
             }
             if "qwen" in model.lower():
                 payload["enable_thinking"] = False
