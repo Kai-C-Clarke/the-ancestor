@@ -133,7 +133,7 @@ class SignalExperiment:
         self.mi_score      = 0.0
 
         # Full turn log (last 200 turns)
-        self.turn_log      = collections.deque(maxlen=200)
+        self.turn_log      = collections.deque(maxlen=5000)
 
         # Intervention log
         self.interventions = []
@@ -604,6 +604,19 @@ def start_experiment(app):
 
         ok, msg = experiment.intervene(parameter, value, reason)
         return jsonify({"ok": ok, "message": msg})
+
+    @app.route("/llm/fulllog")
+    def llm_fulllog():
+        from flask import jsonify
+        with experiment._lock:
+            return jsonify({
+                "turn":          experiment.turn,
+                "phase":         experiment.phase,
+                "mi_score":      experiment.mi_score,
+                "total_entries": len(experiment.turn_log),
+                "turn_log":      list(experiment.turn_log),
+                "interventions": experiment.interventions,
+            })
 
     @app.route("/llm/stop")
     def llm_stop():
